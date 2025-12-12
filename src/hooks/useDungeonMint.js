@@ -14,7 +14,7 @@ export function useDungeonMint() {
   const [isMinting, setIsMinting] = useState(false);
 
   const mintDungeon = useCallback(
-    async ({ name, blobId, imageBlobId }) => {
+    async ({ name, blobId, patchMapId, imageUrl }) => {
       if (!account) throw new Error("Chưa kết nối ví");
       if (!PACKAGE_ID || !DUNGEON_CAP) {
         throw new Error("Thiếu PACKAGE_ID hoặc DUNGEON_CAP trong env");
@@ -28,9 +28,10 @@ export function useDungeonMint() {
           arguments: [
             tx.pure.vector("u8", Array.from(new TextEncoder().encode(name))),
             tx.pure.vector("u8", Array.from(new TextEncoder().encode(blobId))),
+            tx.pure.vector("u8", Array.from(new TextEncoder().encode(patchMapId))),
             tx.pure.vector(
               "u8",
-              Array.from(new TextEncoder().encode(imageBlobId))
+              Array.from(new TextEncoder().encode(imageUrl))
             ),
             tx.object(DUNGEON_CAP),
             tx.pure.address(account.address),

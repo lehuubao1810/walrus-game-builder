@@ -142,7 +142,7 @@ export default function Editor() {
   const gameContainerRef = useRef(null);
 
   const editorGridRef = useRef(null);
-  const { uploadFiles, isUploading } = useWalrusUpload();
+  const { uploadMap, uploadImage, isUploading } = useWalrusUpload();
   const { mintDungeon, isMinting } = useDungeonMint();
 
   // Nạp dữ liệu map on-chain theo id
@@ -152,7 +152,10 @@ export default function Editor() {
       try {
         const dungeon = await fetchDungeonById(id);
         if (!dungeon) return;
-        const mapJson = await readDungeonMap(dungeon.blobId);
+        // Sử dụng patchMapId để đọc map (nếu có), fallback về blobId
+        const idToUse = dungeon.patchMapId || dungeon.blobId;
+        if (!idToUse) return;
+        const mapJson = await readDungeonMap(idToUse);
         if (!validateMapJsonSchema(mapJson)) return;
 
         setMapSize({
@@ -426,29 +429,34 @@ export default function Editor() {
   const handleSaveAndMint = async () => {
     if (!validateMap()) return;
     try {
-      setMintStatus("Uploading to Walrus...");
+      setMintStatus("Uploading map to Walrus...");
       const mapJson = buildMapPayload();
+      
+      // Upload map lên Walrus
+      const mapResult = await uploadMap(mapJson);
+      console.log("mapResult", mapResult);
+      const blobId = mapResult.blobId;
+      const patchMapId = mapResult.patchId;
+
+      // Upload thumbnail riêng để lấy patchId và tạo URL
+      setMintStatus("Uploading thumbnail to Walrus...");
       const thumbnail = await captureThumbnail();
-
-      const uploadRes = await uploadFiles({
-        mapJson,
-        thumbnailBlob: thumbnail,
-      });
-
-      const blobId = uploadRes.map.patchId || uploadRes.map.blobId;
-      const imageBlobId =
-        uploadRes.image?.patchId ||
-        uploadRes.image?.blobId ||
-        uploadRes.map.patchId;
+      const imageResult = await uploadImage(thumbnail);
+      const imagePatchId = imageResult.patchId;
+      
+      // Tạo image URL từ patchId
+      const imageUrl = `https://wal-aggregator-testnet.staketab.org/v1/blobs/by-quilt-patch-id/${imagePatchId}`;
 
       setMintStatus("Minting on Sui testnet...");
       const digest = await mintDungeon({
         name: mapJson.meta.title,
         blobId,
-        imageBlobId,
+        patchMapId,
+        imageUrl,
       });
 
       setMintStatus(`Mint thành công: ${digest}`);
+      // setMintStatus(`Mint thành công`);
     } catch (err) {
       console.error(err);
       setMintStatus(`Lỗi: ${err.message}`);

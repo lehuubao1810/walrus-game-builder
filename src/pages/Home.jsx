@@ -3,10 +3,7 @@ import { Link } from "react-router-dom";
 import { Box, Play, Edit3 } from "lucide-react";
 import { WalletBar } from "../components/WalletBar";
 import { useCurrentAccount } from "@mysten/dapp-kit";
-import {
-  getWalrusImageUrl,
-  loadDungeonsFromWallet,
-} from "../services/dungeonService";
+import { loadDungeonsFromWallet } from "../services/dungeonService";
 import { PACKAGE_ID } from "../config/sui";
 import { useDungeonStore } from "../store/useDungeonStore";
 
@@ -23,8 +20,9 @@ export default function Home() {
       }
       setLoading(true);
       try {
+        // Chỉ lấy metadata từ NFT, không hydrate (không gọi Walrus)
         const data = await loadDungeonsFromWallet(account.address, {
-          hydrate: true,
+          hydrate: false,
         });
         if (isMounted) setDungeons(data || []);
       } catch (err) {
@@ -86,34 +84,28 @@ export default function Home() {
                   Map #{game.id}
                 </p>
                 <h3 className="text-xl font-black text-slate-900">
-                  {game.settings?.meta?.title || game.name}
+                  {game.name}
                 </h3>
                 <p className="text-xs text-slate-500 font-mono">
-                  {game.settings?.meta?.created || ""}
+                  Creator: {game.creator?.slice(0, 8)}...
                 </p>
-                {game.imageBlobId && (
+                {game.imageUrl && (
                   <div className="rounded border-2 border-slate-200 overflow-hidden">
                     <img
-                      src={getWalrusImageUrl(game.imageBlobId)}
+                      src={game.imageUrl}
                       alt="Thumbnail"
                       className="w-full h-40 object-cover"
+                      onError={(e) => {
+                        // Fallback nếu image URL không load được
+                        e.target.style.display = "none";
+                      }}
                     />
                   </div>
                 )}
 
                 <div className="text-sm text-slate-600 flex gap-3">
-                  <span>
-                    Size:{" "}
-                    {game.settings
-                      ? `${game.settings.config.width}x${game.settings.config.height}`
-                      : "N/A"}
-                  </span>
-                  <span>
-                    Tile:{" "}
-                    {game.settings
-                      ? game.settings.config.tileSize
-                      : game.tileSize || 32}
-                  </span>
+                  <span>Likes: {game.likes || 0}</span>
+                  <span>ID: {game.id?.slice(0, 8)}...</span>
                 </div>
               </div>
 

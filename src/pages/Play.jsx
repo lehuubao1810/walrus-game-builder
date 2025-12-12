@@ -25,7 +25,10 @@ export default function Play() {
         if (PACKAGE_ID) {
           const onchain = await fetchDungeonById(id);
           if (onchain) {
-            const mapJson = await readDungeonMap(onchain.blobId);
+            // Sử dụng patchMapId để đọc map (nếu có), fallback về blobId
+            const idToUse = onchain.patchMapId || onchain.blobId;
+            if (!idToUse) throw new Error("Không có patchMapId hoặc blobId");
+            const mapJson = await readDungeonMap(idToUse);
             if (!validateMapJsonSchema(mapJson)) throw new Error("Map không hợp lệ");
             onchain.settings = mapJson;
             game = onchain;

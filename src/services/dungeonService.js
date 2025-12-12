@@ -3,13 +3,34 @@ import {
   PACKAGE_ID,
   MODULE,
   SUI_RPC,
+  SUI_NETWORK,
   WALRUS_GATEWAY,
+  WALRUS_WASM_URL,
 } from "../config/sui";
 
 const client = new SuiClient({ url: SUI_RPC });
 const DUNGEON_TYPE =
   PACKAGE_ID && MODULE ? `${PACKAGE_ID}::${MODULE}::Dungeon` : null;
 
+// Tạo Walrus client để đọc/blob bằng SDK (tránh CORS)
+const createWalrusClient = async () => {
+  const { walrus } = await import("@mysten/walrus");
+  const suiClient = new SuiClient({ url: SUI_RPC });
+  return suiClient.$extend(
+    walrus({
+      wasmUrl: WALRUS_WASM_URL,
+      network: SUI_NETWORK,
+      uploadRelay: {
+        host: "https://upload-relay.testnet.walrus.space",
+        sendTip: {
+          max: 1_000,
+        },
+      },
+    })
+  );
+};
+
+// Hàm này giữ lại để tương thích ngược, nhưng nên dùng imageUrl trực tiếp từ NFT
 export const getWalrusImageUrl = (blobId) =>
   `${WALRUS_GATEWAY}/${blobId}`;
 
@@ -43,7 +64,8 @@ const parseDungeonObject = (item) => {
     id: item.data?.objectId,
     name: f.name,
     blobId: f.blob_id,
-    imageBlobId: f.image_blob_id,
+    patchMapId: f.patch_map_id,
+    imageUrl: f.image_url,
     creator: f.creator,
     likes: Number(f.likes || 0),
   };
@@ -60,12 +82,23 @@ export const fetchDungeonsByOwner = async (owner) => {
   return resp.data.map(parseDungeonObject).filter(Boolean);
 };
 
-export const readDungeonMap = async (blobId) => {
-  const res = await fetch(`https://wal-aggregator-testnet.staketab.org/v1/blobs/${blobId}`);
-  if (!res.ok) throw new Error("Không đọc được blob từ Walrus");
-  const text = await res.text();
-  return JSON.parse(text);
+export const readDungeonMap = async (patchId) => {
+  const walrusClient = await createWalrusClient();
+
+  // getFiles nhận cả Blob ID lẫn Quilt ID
+  const [file] = await walrusClient.walrus.getFiles({ ids: [patchId] });
+
+  // file.json() sẽ parse đúng UTF-8 JSON
+  return await file.json();
 };
+
+// http call - error CORS
+// export const readDungeonMap = async () => {
+//   const url = `${WALRUS_GATEWAY}/XYLHo4XQ58cg7hiqVqHCn60WZFMItH9P4r1L29cf7FkBAQADAA`;
+//   const res = await fetch(url, { headers: { Accept: "application/json" }});
+//   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+//   return await res.json();
+// };
 
 export const fetchDungeonById = async (objectId) => {
   if (!DUNGEON_TYPE) return null;
@@ -81,7 +114,8 @@ export const fetchDungeonById = async (objectId) => {
     id: resp.data.objectId,
     name: f.name,
     blobId: f.blob_id,
-    imageBlobId: f.image_blob_id,
+    patchMapId: f.patch_map_id,
+    imageUrl: f.image_url,
     creator: f.creator,
     likes: Number(f.likes || 0),
   };
@@ -94,7 +128,10 @@ export const loadDungeonsFromWallet = async (owner, { hydrate = true } = {}) => 
   const enriched = await Promise.all(
     base.map(async (d) => {
       try {
-        const map = await readDungeonMap(d.blobId);
+        // Sử dụng patchMapId để đọc map (nếu có), fallback về blobId
+        const idToUse = d.patchMapId || d.blobId;
+        if (!idToUse) return null;
+        const map = await readDungeonMap(idToUse);
         if (!validateMapJson(map)) return null;
         return {
           ...d,
