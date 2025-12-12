@@ -1,36 +1,27 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useParams } from "react-router-dom";
 import kaboom from "kaboom";
 
 import {
-  Save,
   Play,
   Edit3,
-  Trash2,
   Box,
   CircleDollarSign,
   User,
   Eraser,
-  MoveHorizontal,
-  MoveVertical,
-  RefreshCcw,
-  Settings,
-  Image as ImageIcon,
   Palette,
-  AlertCircle,
-  Upload,
-  CheckCircle2,
   MousePointer2,
   Grid,
   Download,
   Ghost,
-  Skull,
   Flame,
-  FileJson,
+  Image as ImageIcon,
   ZoomIn,
   ZoomOut,
   Search,
   Hand,
 } from "lucide-react";
+import { games } from "../mock-data/games";
 
 // --- CẤU HÌNH BAN ĐẦU ---
 
@@ -45,11 +36,11 @@ const VIEWPORT_HEIGHT = 12; // 12 ô dọc
 // Danh sách công cụ
 
 const TOOLS = [
-  { id: "1", char: "1", label: "TƯỜNG GẠCH", type: "WALL" },
+  { id: "1", char: "1", label: "TƯỜNG LOẠI 1", type: "WALL" },
 
-  { id: "2", char: "2", label: "TƯỜNG ĐÁ", type: "WALL" },
+  { id: "2", char: "2", label: "TƯỜNG LOẠI 2", type: "WALL" },
 
-  { id: "3", char: "3", label: "TƯỜNG GỖ", type: "WALL" },
+  { id: "3", char: "3", label: "TƯỜNG LOẠI 3", type: "WALL" },
 
   {
     id: "TRAP",
@@ -107,14 +98,16 @@ const PRESETS = {
   WOOD: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/underground/hard-stone.png",
 };
 
+const DEFAULT_WALLS = {
+  1: { color: "#f97316", type: "color", imgUrl: "" },
+  2: { color: "#64748b", type: "color", imgUrl: "" },
+  3: { color: "#78350f", type: "color", imgUrl: "" },
+};
+
 export default function Editor() {
-  const [wallConfigs, setWallConfigs] = useState({
-    1: { color: "#f97316", type: "color", imgUrl: "" },
+  const { id } = useParams();
 
-    2: { color: "#64748b", type: "color", imgUrl: "" },
-
-    3: { color: "#78350f", type: "color", imgUrl: "" },
-  });
+  const [wallConfigs, setWallConfigs] = useState(DEFAULT_WALLS);
 
   const [mapSize, setMapSize] = useState({ width: 20, height: 12 });
 
@@ -140,9 +133,33 @@ export default function Editor() {
 
   const gameContainerRef = useRef(null);
 
-  const fileInputRef = useRef(null);
-
   const editorGridRef = useRef(null);
+
+  // Nạp dữ liệu map từ mock Walrus theo id
+  useEffect(() => {
+    if (!id) return;
+    const game = games.find((g) => g.id === id);
+    if (!game) return;
+
+    const { settings } = game;
+    setMapSize({
+      width: settings.config.width,
+      height: settings.config.height,
+    });
+    setMapData(settings.layout.map((row) => row.split("")));
+
+    const nextWalls = { ...DEFAULT_WALLS };
+    Object.entries(settings.assets).forEach(([key, asset]) => {
+      nextWalls[key] = {
+        ...nextWalls[key],
+        type: asset.type,
+        color: asset.type === "color" ? asset.value : nextWalls[key]?.color,
+        imgUrl: asset.type === "image" ? asset.value : nextWalls[key]?.imgUrl,
+      };
+    });
+    setWallConfigs(nextWalls);
+    setMode("EDIT");
+  }, [id]);
 
   const currentTool = TOOLS.find((t) => t.id === selectedToolId) || TOOLS[0];
 
@@ -310,6 +327,40 @@ export default function Editor() {
     setMapData(newMap);
   };
 
+  // Validate map trước khi PLAY hoặc Export
+  const validateMap = () => {
+    const flat = mapData.flat();
+    const allowedChars = new Set([...Object.keys(wallConfigs), "@", "$", "E", "^", " "]);
+
+    // Ít nhất 1 player
+    const playerCount = flat.filter((c) => c === "@").length;
+    if (playerCount !== 1) {
+      alert("Map cần có đúng 1 nhân vật (@).");
+      return false;
+    }
+
+    // Không toàn ô trống
+    if (flat.every((c) => c === " ")) {
+      alert("Map không được để trống toàn bộ.");
+      return false;
+    }
+
+    // Kiểm tra legend (chỉ ký tự cho phép)
+    const hasIllegal = flat.some((c) => !allowedChars.has(c));
+    if (hasIllegal) {
+      alert("Map chứa ký tự không hợp lệ (ngoài legend cho phép).");
+      return false;
+    }
+
+    // Giới hạn kích thước
+    if (mapSize.width > 300 || mapSize.height > 100) {
+      alert("Kích thước vượt giới hạn 300x100.");
+      return false;
+    }
+
+    return true;
+  };
+
   const updateWallConfig = (wallId, field, value) => {
     setWallConfigs((prev) => ({
       ...prev,
@@ -350,91 +401,9 @@ export default function Editor() {
       layout: mapData.map((row) => row.join("")),
     };
 
-    const fileName = `dungeon-map-${Date.now()}.json`;
-
-    const jsonStr = JSON.stringify(exportData, null, 2);
-
-    const blob = new Blob([jsonStr], { type: "application/json" });
-
-    const href = URL.createObjectURL(blob);
-
-    const link = document.createElement("a");
-
-    link.href = href;
-
-    link.download = fileName;
-
-    document.body.appendChild(link);
-
-    link.click();
-
-    document.body.removeChild(link);
-
-    URL.revokeObjectURL(href);
-  };
-
-  const handleImportClick = () => {
-    if (fileInputRef.current) fileInputRef.current.click();
-  };
-
-  const handleImportFile = (event) => {
-    const file = event.target.files[0];
-
-    if (!file) return;
-
-    const reader = new FileReader();
-
-    reader.onload = (e) => {
-      try {
-        const json = JSON.parse(e.target.result);
-
-        if (!json.config || !json.layout || !json.assets) {
-          alert("LỖI: File không hợp lệ!");
-          return;
-        }
-
-        setMapSize({ width: json.config.width, height: json.config.height });
-
-        setMapData(json.layout.map((row) => row.split("")));
-
-        const newWallConfigs = { ...wallConfigs };
-
-        Object.keys(json.assets).forEach((key) => {
-          if (newWallConfigs[key]) {
-            const asset = json.assets[key];
-
-            newWallConfigs[key] = {
-              ...newWallConfigs[key],
-
-              type: asset.type,
-
-              color:
-                asset.type === "color"
-                  ? asset.value
-                  : newWallConfigs[key].color,
-
-              imgUrl:
-                asset.type === "image"
-                  ? asset.value
-                  : newWallConfigs[key].imgUrl,
-            };
-          }
-        });
-
-        setWallConfigs(newWallConfigs);
-
-        setMode("EDIT");
-
-        alert("Đã tải map thành công!");
-      } catch (err) {
-        console.error(err);
-        alert("Lỗi khi đọc file: " + err.message);
-      }
-
-      event.target.value = null;
-    };
-
-    reader.readAsText(file);
+    // Chỉ log ra console thay vì tải file
+    console.log("Exported map:", exportData);
+    alert("Đã log dữ liệu map ra console.");
   };
 
   useEffect(() => {
@@ -925,18 +894,12 @@ export default function Editor() {
         {/* TOP BAR (Luôn hiển thị) */}
 
         <div className="absolute top-6 right-6 z-30 flex gap-4">
-          <input
-            type="file"
-            ref={fileInputRef}
-            className="hidden"
-            accept=".json"
-            onChange={handleImportFile}
-          />
-
           {mode === "EDIT" ? (
             <>
                <RetroButton
-                 onClick={() => setMode("PLAY")}
+                 onClick={() => {
+                   if (validateMap()) setMode("PLAY");
+                 }}
                  className="bg-green-500 hover:bg-green-400 text-white flex items-center gap-2"
                >
                  <Play size={18} fill="currentColor" strokeWidth={3} />{" "}
@@ -944,13 +907,6 @@ export default function Editor() {
                </RetroButton>
 
               <div className="flex gap-2">
-                <RetroButton
-                  onClick={handleImportClick}
-                  className="bg-blue-500 hover:bg-blue-400 text-white flex items-center gap-2"
-                >
-                  <Upload size={18} strokeWidth={3} /> LOAD
-                </RetroButton>
-
                 <RetroButton
                   onClick={handleExport}
                   className="bg-purple-500 hover:bg-purple-400 text-white flex items-center gap-2"
