@@ -61,7 +61,7 @@ export const fetchDungeonsByOwner = async (owner) => {
 };
 
 export const readDungeonMap = async (blobId) => {
-  const res = await fetch(`${WALRUS_GATEWAY}/${blobId}`);
+  const res = await fetch(`https://wal-aggregator-testnet.staketab.org/v1/blobs/${blobId}`);
   if (!res.ok) throw new Error("Không đọc được blob từ Walrus");
   const text = await res.text();
   return JSON.parse(text);

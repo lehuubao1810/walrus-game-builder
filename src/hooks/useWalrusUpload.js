@@ -96,10 +96,14 @@ export function useWalrusUpload() {
         const uploaded = await flow.listFiles();
         if (!uploaded.length) throw new Error("Upload thất bại: không có file");
 
+        console.log("uploaded", uploaded);
+
         const jsonFile =
-          uploaded.find((f) => f.identifier.endsWith(".json")) || uploaded[0];
+          uploaded.find(
+            (f) => typeof f?.identifier === "string" && f.identifier.endsWith(".json")
+          ) || uploaded[0];
         const imageFile = uploaded.find(
-          (f) => f.identifier !== jsonFile.identifier
+          (f) => f?.identifier && f.identifier !== jsonFile.identifier
         );
 
         return {
