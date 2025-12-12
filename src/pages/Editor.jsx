@@ -21,7 +21,14 @@ import {
   Search,
   Hand,
 } from "lucide-react";
-import { games } from "../mock-data/games";
+import { WalletBar } from "../components/WalletBar";
+import { useWalrusUpload } from "../hooks/useWalrusUpload";
+import { useDungeonMint } from "../hooks/useDungeonMint";
+import {
+  fetchDungeonById,
+  readDungeonMap,
+  validateMapJsonSchema,
+} from "../services/dungeonService";
 
 // --- CẤU HÌNH BAN ĐẦU ---
 
@@ -124,6 +131,7 @@ export default function Editor() {
   const [zoom, setZoom] = useState(1.0);
 
   const [isZoomMode, setIsZoomMode] = useState(false);
+  const [mintStatus, setMintStatus] = useState("");
 
   const scrollContainerRef = useRef(null);
 
@@ -134,31 +142,42 @@ export default function Editor() {
   const gameContainerRef = useRef(null);
 
   const editorGridRef = useRef(null);
+  const { uploadFiles, isUploading } = useWalrusUpload();
+  const { mintDungeon, isMinting } = useDungeonMint();
 
-  // Nạp dữ liệu map từ mock Walrus theo id
+  // Nạp dữ liệu map on-chain theo id
   useEffect(() => {
-    if (!id) return;
-    const game = games.find((g) => g.id === id);
-    if (!game) return;
+    const load = async () => {
+      if (!id) return;
+      try {
+        const dungeon = await fetchDungeonById(id);
+        if (!dungeon) return;
+        const mapJson = await readDungeonMap(dungeon.blobId);
+        if (!validateMapJsonSchema(mapJson)) return;
 
-    const { settings } = game;
-    setMapSize({
-      width: settings.config.width,
-      height: settings.config.height,
-    });
-    setMapData(settings.layout.map((row) => row.split("")));
+        setMapSize({
+          width: mapJson.config.width,
+          height: mapJson.config.height,
+        });
+        setMapData(mapJson.layout.map((row) => row.split("")));
 
-    const nextWalls = { ...DEFAULT_WALLS };
-    Object.entries(settings.assets).forEach(([key, asset]) => {
-      nextWalls[key] = {
-        ...nextWalls[key],
-        type: asset.type,
-        color: asset.type === "color" ? asset.value : nextWalls[key]?.color,
-        imgUrl: asset.type === "image" ? asset.value : nextWalls[key]?.imgUrl,
-      };
-    });
-    setWallConfigs(nextWalls);
-    setMode("EDIT");
+        const nextWalls = { ...DEFAULT_WALLS };
+        Object.entries(mapJson.assets).forEach(([key, asset]) => {
+          nextWalls[key] = {
+            ...nextWalls[key],
+            type: asset.type,
+            color: asset.type === "color" ? asset.value : nextWalls[key]?.color,
+            imgUrl:
+              asset.type === "image" ? asset.value : nextWalls[key]?.imgUrl,
+          };
+        });
+        setWallConfigs(nextWalls);
+        setMode("EDIT");
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    load();
   }, [id]);
 
   const currentTool = TOOLS.find((t) => t.id === selectedToolId) || TOOLS[0];
@@ -369,7 +388,7 @@ export default function Editor() {
     }));
   };
 
-  const handleExport = () => {
+  const buildMapPayload = () => {
     const assetsExport = {};
 
     Object.keys(wallConfigs).forEach((key) => {
@@ -377,33 +396,105 @@ export default function Editor() {
 
       assetsExport[key] = {
         type: conf.type,
-
         value: conf.type === "color" ? conf.color : conf.imgUrl,
       };
     });
 
-    const exportData = {
+    return {
       meta: {
         title: "Walrus Dungeon Map",
         created: new Date().toISOString(),
         engine: "Kaboom.js",
         version: "1.1",
       },
-
       config: {
         width: mapSize.width,
         height: mapSize.height,
         tileSize: BASE_TILE_SIZE,
       },
-
       assets: assetsExport,
-
       layout: mapData.map((row) => row.join("")),
     };
+  };
 
-    // Chỉ log ra console thay vì tải file
+  const handleExport = () => {
+    const exportData = buildMapPayload();
     console.log("Exported map:", exportData);
     alert("Đã log dữ liệu map ra console.");
+  };
+
+  const handleSaveAndMint = async () => {
+    if (!validateMap()) return;
+    try {
+      setMintStatus("Uploading to Walrus...");
+      const mapJson = buildMapPayload();
+      const thumbnail = await captureThumbnail();
+
+      const uploadRes = await uploadFiles({
+        mapJson,
+        thumbnailBlob: thumbnail,
+      });
+
+      const blobId = uploadRes.map.patchId || uploadRes.map.blobId;
+      const imageBlobId =
+        uploadRes.image?.patchId ||
+        uploadRes.image?.blobId ||
+        uploadRes.map.patchId;
+
+      setMintStatus("Minting on Sui testnet...");
+      const digest = await mintDungeon({
+        name: mapJson.meta.title,
+        blobId,
+        imageBlobId,
+      });
+
+      setMintStatus(`Mint thành công: ${digest}`);
+    } catch (err) {
+      console.error(err);
+      setMintStatus(`Lỗi: ${err.message}`);
+      alert(err.message);
+    }
+  };
+
+  const captureThumbnail = async () => {
+    const thumbTile = 16;
+    const canvas = document.createElement("canvas");
+    canvas.width = mapSize.width * thumbTile;
+    canvas.height = mapSize.height * thumbTile;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    ctx.fillStyle = "#fff7ed";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const drawCell = (r, c, color) => {
+      ctx.fillStyle = color;
+      ctx.fillRect(c * thumbTile, r * thumbTile, thumbTile, thumbTile);
+      ctx.strokeStyle = "#0f172a";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(c * thumbTile, r * thumbTile, thumbTile, thumbTile);
+    };
+
+    mapData.forEach((row, r) => {
+      row.forEach((cell, c) => {
+        const wallConf = wallConfigs[cell];
+        if (wallConf) {
+          drawCell(r, c, wallConf.color || "#cbd5e1");
+        } else if (cell === "@") {
+          drawCell(r, c, "#3b82f6");
+        } else if (cell === "$") {
+          drawCell(r, c, "#eab308");
+        } else if (cell === "E") {
+          drawCell(r, c, "#a855f7");
+        } else if (cell === "^") {
+          drawCell(r, c, "#ef4444");
+        }
+      });
+    });
+
+    return new Promise((resolve) =>
+      canvas.toBlob((blob) => resolve(blob), "image/png")
+    );
   };
 
   useEffect(() => {
@@ -647,7 +738,10 @@ export default function Editor() {
   const currentTileSize = BASE_TILE_SIZE * zoom;
 
   return (
-    <div className="flex h-screen bg-orange-50 text-slate-900 font-mono overflow-hidden">
+    <div className="flex h-screen bg-orange-50 text-slate-900 font-mono overflow-hidden relative pt-12">
+      <div className="absolute top-0 left-0 right-0 z-40">
+        <WalletBar />
+      </div>
       <style>{`
 
         .hide-scrollbar::-webkit-scrollbar { display: none; }
@@ -893,7 +987,7 @@ export default function Editor() {
       <div className="flex-1 relative flex flex-col overflow-hidden">
         {/* TOP BAR (Luôn hiển thị) */}
 
-        <div className="absolute top-6 right-6 z-30 flex gap-4">
+        <div className="absolute top-6 right-6 z-30 flex gap-4 items-center">
           {mode === "EDIT" ? (
             <>
                <RetroButton
@@ -913,6 +1007,13 @@ export default function Editor() {
                 >
                   <Download size={18} strokeWidth={3} /> SAVE
                 </RetroButton>
+                <RetroButton
+                  onClick={handleSaveAndMint}
+                  disabled={isUploading || isMinting}
+                  className="bg-pink-500 hover:bg-pink-400 text-white flex items-center gap-2"
+                >
+                  {isUploading || isMinting ? "ĐANG XỬ LÝ..." : "SAVE & MINT"}
+                </RetroButton>
               </div>
             </>
           ) : (
@@ -924,6 +1025,12 @@ export default function Editor() {
             </RetroButton>
           )}
         </div>
+
+        {mintStatus && (
+          <div className="absolute top-6 left-6 z-30 bg-white border-2 border-slate-900 px-3 py-2 shadow-[6px_6px_0px_0px_rgba(15,23,42,0.6)] text-xs font-mono">
+            {mintStatus}
+          </div>
+        )}
 
         {/* --- KHÔNG GIAN EDIT (INFINITE CANVAS) --- */}
 

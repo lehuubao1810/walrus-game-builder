@@ -2,21 +2,57 @@ import React, { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import kaboom from "kaboom";
 import { Play as PlayIcon, ArrowLeft, Edit3 } from "lucide-react";
-import { games } from "../mock-data/games";
+import {
+  fetchDungeonById,
+  readDungeonMap,
+  validateMapJsonSchema,
+} from "../services/dungeonService";
+import { PACKAGE_ID } from "../config/sui";
 
 export default function Play() {
   const { id } = useParams();
   const gameContainerRef = useRef(null);
   const [gameData, setGameData] = useState(null);
   const [scale, setScale] = useState(1);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const game = games.find((g) => g.id === id);
-    setGameData(game || null);
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      try {
+        let game = null;
+        if (PACKAGE_ID) {
+          const onchain = await fetchDungeonById(id);
+          if (onchain) {
+            const mapJson = await readDungeonMap(onchain.blobId);
+            if (!validateMapJsonSchema(mapJson)) throw new Error("Map không hợp lệ");
+            onchain.settings = mapJson;
+            game = onchain;
+          }
+        }
+        if (active) setGameData(game);
+      } catch (err) {
+        console.error(err);
+        if (active) setGameData(null);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    load();
+    return () => {
+      active = false;
+    };
   }, [id]);
 
   useEffect(() => {
-    if (!gameData || !gameContainerRef.current) return;
+    if (
+      !gameData ||
+      !gameContainerRef.current ||
+      !gameData.settings?.layout ||
+      !gameData.settings?.config
+    )
+      return;
 
     const { settings } = gameData;
     const tileSize = settings.config.tileSize || 32;
@@ -210,6 +246,15 @@ export default function Play() {
       if (k && k.quit) k.quit();
     };
   }, [gameData]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-orange-50 text-slate-900">
+        <p className="text-lg font-bold mb-2">Đang tải map...</p>
+        <p className="text-sm text-slate-600">Vui lòng chờ trong giây lát</p>
+      </div>
+    );
+  }
 
   if (!gameData) {
     return (

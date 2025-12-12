@@ -1,11 +1,49 @@
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Box, Play, Edit3 } from "lucide-react";
-import { games } from "../mock-data/games";
+import { WalletBar } from "../components/WalletBar";
+import { useCurrentAccount } from "@mysten/dapp-kit";
+import {
+  getWalrusImageUrl,
+  loadDungeonsFromWallet,
+} from "../services/dungeonService";
+import { PACKAGE_ID } from "../config/sui";
+import { useDungeonStore } from "../store/useDungeonStore";
 
 export default function Home() {
+  const account = useCurrentAccount();
+  const { dungeons, loading, setDungeons, setLoading } = useDungeonStore();
+
+  useEffect(() => {
+    let isMounted = true;
+    const load = async () => {
+      if (!account || !PACKAGE_ID) {
+        setDungeons([]);
+        return;
+      }
+      setLoading(true);
+      try {
+        const data = await loadDungeonsFromWallet(account.address, {
+          hydrate: true,
+        });
+        if (isMounted) setDungeons(data || []);
+      } catch (err) {
+        console.error(err);
+        if (isMounted) setDungeons([]);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+    load();
+    return () => {
+      isMounted = false;
+    };
+  }, [account, setDungeons, setLoading]);
+
   return (
     <div className="min-h-screen bg-linear-to-br from-orange-50 to-orange-100 py-12 px-6">
       <div className="max-w-6xl mx-auto">
+        <WalletBar />
         <header className="text-center mb-12 flex flex-col items-center gap-4">
           <div className="flex items-center justify-center gap-4 mb-4">
             <Box strokeWidth={3} className="text-orange-600" size={64} />
@@ -30,10 +68,15 @@ export default function Home() {
             phi tập trung trên Walrus và sở hữu dưới dạng NFT trên Sui
             Blockchain.
           </p>
+          {loading && PACKAGE_ID && (
+            <p className="text-xs text-orange-600 font-mono">
+              Đang tải dữ liệu on-chain...
+            </p>
+          )}
         </header>
 
         <section className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {games.map((game) => (
+          {dungeons.map((game) => (
             <div
               key={game.id}
               className="relative group bg-white border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] overflow-hidden"
@@ -43,17 +86,34 @@ export default function Home() {
                   Map #{game.id}
                 </p>
                 <h3 className="text-xl font-black text-slate-900">
-                  {game.settings.meta.title}
+                  {game.settings?.meta?.title || game.name}
                 </h3>
                 <p className="text-xs text-slate-500 font-mono">
-                  {game.settings.meta.created}
+                  {game.settings?.meta?.created || ""}
                 </p>
+                {game.imageBlobId && (
+                  <div className="rounded border-2 border-slate-200 overflow-hidden">
+                    <img
+                      src={getWalrusImageUrl(game.imageBlobId)}
+                      alt="Thumbnail"
+                      className="w-full h-40 object-cover"
+                    />
+                  </div>
+                )}
+
                 <div className="text-sm text-slate-600 flex gap-3">
                   <span>
-                    Size: {game.settings.config.width}x
-                    {game.settings.config.height}
+                    Size:{" "}
+                    {game.settings
+                      ? `${game.settings.config.width}x${game.settings.config.height}`
+                      : "N/A"}
                   </span>
-                  <span>Tile: {game.settings.config.tileSize}</span>
+                  <span>
+                    Tile:{" "}
+                    {game.settings
+                      ? game.settings.config.tileSize
+                      : game.tileSize || 32}
+                  </span>
                 </div>
               </div>
 
@@ -73,6 +133,18 @@ export default function Home() {
               </div>
             </div>
           ))}
+          {!loading && dungeons.length === 0 && (
+            <div className="col-span-full text-center text-sm text-slate-500 font-mono py-10">
+              {account && PACKAGE_ID
+                ? "Chưa có dungeon on-chain. Hãy mint một map mới!"
+                : "Kết nối ví để tải dungeon trên testnet."}
+            </div>
+          )}
+          {loading && (
+            <div className="col-span-full text-center text-sm text-orange-600 font-mono py-8">
+              Đang tải dữ liệu on-chain...
+            </div>
+          )}
         </section>
 
         <div className="mt-10 flex flex-col items-center gap-3">
