@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import kaboom from "kaboom";
+import { useCurrentAccount, ConnectButton } from "@mysten/dapp-kit";
 
 import {
   Play,
@@ -15,13 +16,13 @@ import {
   Download,
   Ghost,
   Flame,
-  Image as ImageIcon,
   ZoomIn,
   ZoomOut,
   Search,
   Hand,
   Trophy,
   RotateCcw,
+  ArrowLeft,
 } from "lucide-react";
 import { WalletBar } from "../components/WalletBar";
 import { useWalrusUpload } from "../hooks/useWalrusUpload";
@@ -45,16 +46,16 @@ const VIEWPORT_HEIGHT = 12; // 12 ô dọc
 // Danh sách công cụ
 
 const TOOLS = [
-  { id: "1", char: "1", label: "TƯỜNG LOẠI 1", type: "WALL" },
+  { id: "1", char: "1", label: "WALL TYPE 1", type: "WALL" },
 
-  { id: "2", char: "2", label: "TƯỜNG LOẠI 2", type: "WALL" },
+  { id: "2", char: "2", label: "WALL TYPE 2", type: "WALL" },
 
-  { id: "3", char: "3", label: "TƯỜNG LOẠI 3", type: "WALL" },
+  { id: "3", char: "3", label: "WALL TYPE 3", type: "WALL" },
 
   {
     id: "TRAP",
     char: "^",
-    label: "BẪY (GAI)",
+    label: "TRAP (SPIKE)",
     type: "OBJ",
     icon: Flame,
     color: "#ef4444",
@@ -63,7 +64,7 @@ const TOOLS = [
   {
     id: "ENEMY",
     char: "E",
-    label: "QUÁI VẬT",
+    label: "MONSTER",
     type: "OBJ",
     icon: Ghost,
     color: "#a855f7",
@@ -72,7 +73,7 @@ const TOOLS = [
   {
     id: "PLAYER",
     char: "@",
-    label: "NHÂN VẬT",
+    label: "PLAYER",
     type: "OBJ",
     icon: User,
     color: "#3b82f6",
@@ -81,7 +82,7 @@ const TOOLS = [
   {
     id: "COIN",
     char: "$",
-    label: "KHO BÁU",
+    label: "TREASURE",
     type: "OBJ",
     icon: CircleDollarSign,
     color: "#eab308",
@@ -90,31 +91,22 @@ const TOOLS = [
   {
     id: "EMPTY",
     char: " ",
-    label: "CỤC TẨY",
+    label: "ERASER",
     type: "TOOL",
     icon: Eraser,
     color: "#94a3b8",
   },
 ];
 
-const PRESETS = {
-  BRICK:
-    "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/underground/brick-piece.png",
-
-  STONE:
-    "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/underground/iron-ball.png",
-
-  WOOD: "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/underground/hard-stone.png",
-};
-
 const DEFAULT_WALLS = {
-  1: { color: "#f97316", type: "color", imgUrl: "" },
-  2: { color: "#64748b", type: "color", imgUrl: "" },
-  3: { color: "#78350f", type: "color", imgUrl: "" },
+  1: { color: "#f97316" },
+  2: { color: "#64748b" },
+  3: { color: "#78350f" },
 };
 
 export default function Editor() {
   const { id } = useParams();
+  const navigate = useNavigate();
 
   const [wallConfigs, setWallConfigs] = useState(DEFAULT_WALLS);
 
@@ -125,6 +117,8 @@ export default function Editor() {
       .fill()
       .map(() => Array(20).fill(" "))
   );
+
+  const [loadingMap, setLoadingMap] = useState(false);
 
   const [mode, setMode] = useState("EDIT");
 
@@ -156,7 +150,7 @@ export default function Editor() {
   const gameWrapperRef = useRef(null);
 
   const editorGridRef = useRef(null);
-  const { uploadMap, uploadImage, isUploading } = useWalrusUpload();
+  const { uploadCombinedDungeon, isUploading } = useWalrusUpload();
   const { mintDungeon, isMinting } = useDungeonMint();
 
   // Helper để kiểm tra element có thuộc "safe zone" (UI) không
@@ -215,17 +209,47 @@ export default function Editor() {
     return () => clearTimeout(timer);
   }, [mode, showWinModal, activateGame]);
 
+  const account = useCurrentAccount();
+  const [unAuthorized, setUnAuthorized] = useState(false);
+
   // Nạp dữ liệu map on-chain theo id
   useEffect(() => {
+    let active = true;
     const load = async () => {
       if (!id) return;
+      setLoadingMap(true);
+      setUnAuthorized(false);
       try {
+        // Tạo artificial delay để user thấy loading state rõ hơn (UX)
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        if (!active) return;
+
         const dungeon = await fetchDungeonById(id);
+        // Nếu component đã unmount hoặc dependencies thay đổi thì bỏ qua
+        if (!active) return;
+
         if (!dungeon) return;
+
+        console.log("Dungeon Owner:", dungeon.owner);
+        console.log("Current Account:", account?.address);
+
+        // Check ownership (Updated with case-insensitive check)
+        const isOwner =
+          account?.address &&
+          dungeon.owner &&
+          dungeon.owner.toLowerCase() === account.address.toLowerCase();
+
+        if (!isOwner) {
+          console.warn("Ownership mismatch");
+          if (active) setUnAuthorized(true);
+          return;
+        }
+
         // Sử dụng patchMapId để đọc map (nếu có), fallback về blobId
         const idToUse = dungeon.patchMapId || dungeon.blobId;
         if (!idToUse) return;
         const mapJson = await readDungeonMap(idToUse);
+        if (!active) return;
         if (!validateMapJsonSchema(mapJson)) return;
 
         setMapSize({
@@ -236,13 +260,11 @@ export default function Editor() {
 
         const nextWalls = { ...DEFAULT_WALLS };
         Object.entries(mapJson.assets).forEach(([key, asset]) => {
-          nextWalls[key] = {
-            ...nextWalls[key],
-            type: asset.type,
-            color: asset.type === "color" ? asset.value : nextWalls[key]?.color,
-            imgUrl:
-              asset.type === "image" ? asset.value : nextWalls[key]?.imgUrl,
-          };
+          if (["1", "2", "3"].includes(key) && asset.type === "color") {
+            nextWalls[key] = {
+              color: asset.value,
+            };
+          }
         });
         setWallConfigs(nextWalls);
         if (mapJson?.meta?.title) {
@@ -251,10 +273,16 @@ export default function Editor() {
         setMode("EDIT");
       } catch (err) {
         console.error(err);
+      } finally {
+        if (active) setLoadingMap(false);
       }
     };
     load();
-  }, [id]);
+
+    return () => {
+      active = false;
+    };
+  }, [id, account]);
 
   const currentTool = TOOLS.find((t) => t.id === selectedToolId) || TOOLS[0];
 
@@ -368,16 +396,6 @@ export default function Editor() {
     }
   }, [mode]); // Chạy lại khi chuyển sang mode EDIT
 
-  const handleFileUpload = (wallId, event) => {
-    const file = event.target.files[0];
-
-    if (file) {
-      const objectUrl = URL.createObjectURL(file);
-
-      updateWallConfig(wallId, "imgUrl", objectUrl);
-    }
-  };
-
   const handleResize = (dWidth, dHeight) => {
     const newW = mapSize.width + dWidth;
 
@@ -443,33 +461,33 @@ export default function Editor() {
     // Ít nhất 1 player
     const playerCount = flat.filter((c) => c === "@").length;
     if (playerCount !== 1) {
-      showToast("Map cần có đúng 1 nhân vật (@).");
+      showToast("Map must have exactly 1 player (@).");
       return false;
     }
 
     // Ít nhất 1 kho báu
     const coinCount = flat.filter((c) => c === "$").length;
     if (coinCount < 1) {
-      showToast("Map cần có tối thiểu 1 kho báu ($).");
+      showToast("Map must have at least 1 treasure ($).");
       return false;
     }
 
     // Không toàn ô trống
     if (flat.every((c) => c === " ")) {
-      showToast("Map không được để trống toàn bộ.");
+      showToast("Map cannot be empty.");
       return false;
     }
 
     // Kiểm tra legend (chỉ ký tự cho phép)
     const hasIllegal = flat.some((c) => !allowedChars.has(c));
     if (hasIllegal) {
-      showToast("Map chứa ký tự không hợp lệ (ngoài legend cho phép).");
+      showToast("Map contains invalid characters.");
       return false;
     }
 
     // Giới hạn kích thước
     if (mapSize.width > 300 || mapSize.height > 100) {
-      showToast("Kích thước vượt giới hạn 300x100.");
+      showToast("Size limit exceeded (300x100).");
       return false;
     }
 
@@ -491,8 +509,8 @@ export default function Editor() {
       const conf = wallConfigs[key];
 
       assetsExport[key] = {
-        type: conf.type,
-        value: conf.type === "color" ? conf.color : conf.imgUrl,
+        type: "color",
+        value: conf.color,
       };
     });
 
@@ -516,26 +534,26 @@ export default function Editor() {
   const handleExport = () => {
     const exportData = buildMapPayload();
     console.log("Exported map:", exportData);
-    showToast("Đã log dữ liệu map ra console.", "success");
+    showToast("Map data logged to console.", "success");
   };
 
   const handleSaveAndMint = async () => {
     if (!validateMap()) return;
     try {
-      setMintStatus("Uploading map to Walrus...");
+      setMintStatus("Generating thumbnail...");
       const mapJson = buildMapPayload();
-
-      // Upload map lên Walrus
-      const mapResult = await uploadMap(mapJson);
-      console.log("mapResult", mapResult);
-      const blobId = mapResult.blobId;
-      const patchMapId = mapResult.patchId;
-
-      // Upload thumbnail riêng để lấy patchId và tạo URL
-      setMintStatus("Uploading thumbnail to Walrus...");
       const thumbnail = await captureThumbnail();
-      const imageResult = await uploadImage(thumbnail);
-      const imagePatchId = imageResult.patchId;
+      if (!thumbnail) throw new Error("Failed to capture thumbnail");
+
+      setMintStatus("Uploading to Walrus (Batch)...");
+
+      // Combined upload
+      const { mapCtx, imageCtx } = await uploadCombinedDungeon(mapJson, thumbnail);
+      console.log("Upload Result:", { mapCtx, imageCtx });
+
+      const blobId = mapCtx.blobId;
+      const patchMapId = mapCtx.patchId;
+      const imagePatchId = imageCtx.patchId;
 
       // Tạo image URL từ patchId
       const imageUrl = `https://wal-aggregator-testnet.staketab.org/v1/blobs/by-quilt-patch-id/${imagePatchId}`;
@@ -548,11 +566,11 @@ export default function Editor() {
         imageUrl,
       });
 
-      setMintStatus(`Mint thành công: ${digest}`);
-      showToast(`Mint thành công!`, "success");
+      setMintStatus(`Mint success: ${digest}`);
+      showToast(`Mint success!`, "success");
     } catch (err) {
       console.error(err);
-      setMintStatus(`Lỗi: ${err.message}`);
+      setMintStatus(`Error: ${err.message}`);
       showToast(err.message);
     }
   };
@@ -644,26 +662,7 @@ export default function Editor() {
           };
         }
 
-        const loadPromises = [];
-
-        const validSprites = new Set();
-
-        Object.keys(wallConfigs).forEach((key) => {
-          const conf = wallConfigs[key];
-
-          if (conf.type === "image" && conf.imgUrl) {
-            const p = k
-              .loadSprite(`wall_${key}`, conf.imgUrl)
-              .then(() => {
-                if (!isCleanedUp) validSprites.add(key);
-              })
-              .catch(() => {});
-
-            loadPromises.push(p);
-          }
-        });
-
-        Promise.all(loadPromises).then(() => {
+        Promise.resolve().then(() => {
           if (isCleanedUp) return;
 
           const tilesDef = {};
@@ -679,24 +678,10 @@ export default function Editor() {
                 "wall",
               ];
 
-              if (
-                conf.type === "image" &&
-                conf.imgUrl &&
-                validSprites.has(key)
-              ) {
-                comps.push(
-                  k.sprite(`wall_${key}`, {
-                    width: BASE_TILE_SIZE,
-                    height: BASE_TILE_SIZE,
-                  })
-                );
-              } else {
-                comps.push(k.rect(BASE_TILE_SIZE, BASE_TILE_SIZE));
-
-                comps.push(k.color(k.Color.fromHex(conf.color)));
-
-                comps.push(k.outline(2, k.BLACK));
-              }
+              // Tường chỉ dùng màu
+              comps.push(k.rect(BASE_TILE_SIZE, BASE_TILE_SIZE));
+              comps.push(k.color(k.Color.fromHex(conf.color)));
+              comps.push(k.outline(2, k.BLACK));
 
               return comps;
             };
@@ -891,9 +876,8 @@ export default function Editor() {
       onClick={onClick}
       onPointerDown={onPointerDown}
       disabled={disabled}
-      className={`relative px-4 py-2 font-mono font-bold text-sm uppercase transition-all border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:translate-x-[2px] disabled:translate-y-[2px] ${
-        active ? "text-white" : "text-slate-900 hover:opacity-80"
-      } ${className}`}
+      className={`relative px-4 py-2 font-mono font-bold text-sm uppercase transition-all border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:translate-x-[2px] disabled:translate-y-[2px] ${active ? "text-white" : "text-slate-900 hover:opacity-80"
+        } ${className}`}
     >
       {children}
     </button>
@@ -910,9 +894,40 @@ export default function Editor() {
 
   const currentTileSize = BASE_TILE_SIZE * zoom;
 
+  if (!account) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-orange-50 text-slate-900 font-mono">
+        <div className="bg-white p-8 border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] max-w-md text-center">
+          <h2 className="text-2xl font-black mb-4 text-orange-600 uppercase">Connect Wallet Required</h2>
+          <p className="mb-6 font-medium">Please connect your Sui wallet to access the Editor.</p>
+          <div className="flex justify-center wallet-connect-btn">
+            <ConnectButton />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (unAuthorized) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-orange-50 text-slate-900 font-mono">
+        <div className="bg-white p-8 border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] max-w-md text-center">
+          <h2 className="text-2xl font-black mb-4 text-red-500">UNAUTHORIZED</h2>
+          <p className="mb-6 font-medium">You are not the owner of this NFT Dungeon content.</p>
+          <RetroButton
+            onClick={() => navigate("/")}
+            className="w-full bg-slate-900 text-white hover:bg-slate-700"
+          >
+            RETURN TO HOME
+          </RetroButton>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-screen bg-orange-50 text-slate-900 font-mono overflow-hidden relative pt-12">
-      <div className="absolute top-0 left-0 right-0 z-40">
+    <div className="flex h-screen bg-orange-50 text-slate-900 font-mono overflow-hidden">
+      <div className="fixed top-0 left-0 right-0 z-40">
         <WalletBar />
       </div>
       <style>{`
@@ -925,7 +940,10 @@ export default function Editor() {
 
       {/* SIDEBAR */}
 
-      <div className="w-80 bg-white border-r-4 border-slate-900 flex flex-col shadow-xl z-10 overflow-y-auto">
+      <div className={`w-80 bg-white border-r-4 border-slate-900 flex flex-col shadow-xl z-10 overflow-y-auto mt-14 transition-all duration-300 relative ${mode === "PLAY" ? "opacity-50 grayscale" : ""}`}>
+        {mode === "PLAY" && (
+          <div className="absolute inset-0 z-50 bg-white/20 cursor-not-allowed" />
+        )}
         <div className="p-6 border-b-4 border-slate-900 bg-orange-100">
           <h1 className="text-2xl font-black tracking-tighter text-orange-600 drop-shadow-sm flex items-center gap-2">
             <Box strokeWidth={3} /> WALRUS{" "}
@@ -939,13 +957,13 @@ export default function Editor() {
 
         <div className="p-6 border-b-4 border-slate-900 border-dashed">
           <h3 className="text-sm font-bold uppercase mb-4 flex items-center gap-2">
-            <Grid size={16} strokeWidth={3} /> Kích thước Map
+            <Grid size={16} strokeWidth={3} /> Map Size
           </h3>
 
           <div className="flex gap-4">
             <div className="flex-1">
               <div className="text-xs font-bold mb-1 text-center text-slate-500">
-                RỘNG: {mapSize.width}
+                WIDTH: {mapSize.width}
               </div>
 
               <div className="flex items-center justify-between border-2 border-slate-900 bg-slate-100 p-1">
@@ -967,7 +985,7 @@ export default function Editor() {
 
             <div className="flex-1">
               <div className="text-xs font-bold mb-1 text-center text-slate-500">
-                CAO: {mapSize.height}
+                HEIGHT: {mapSize.height}
               </div>
 
               <div className="flex items-center justify-between border-2 border-slate-900 bg-slate-100 p-1">
@@ -991,23 +1009,24 @@ export default function Editor() {
 
         <div className="p-6 border-b-4 border-slate-900 border-dashed">
           <h3 className="text-sm font-bold uppercase mb-4 flex items-center gap-2">
-            <Edit3 size={16} strokeWidth={3} /> Tên NFT
+            <Edit3 size={16} strokeWidth={3} /> NFT Name
           </h3>
           <input
             type="text"
             value={dungeonName}
             onChange={(e) => setDungeonName(e.target.value)}
-            placeholder="Nhập tên NFT..."
-            className="w-full text-sm font-mono border-2 border-slate-900 p-2 focus:border-orange-500 focus:outline-none bg-white shadow-[2px_2px_0px_0px_rgba(15,23,42,0.2)]"
+            disabled={mode === "PLAY"}
+            placeholder="Enter NFT name..."
+            className="w-full text-sm font-mono border-2 border-slate-900 p-2 focus:border-orange-500 focus:outline-none bg-white shadow-[2px_2px_0px_0px_rgba(15,23,42,0.2)] disabled:bg-slate-100 disabled:text-slate-500"
           />
           <p className="text-xs text-slate-500 mt-2">
-            Tên này sẽ được lưu vào NFT metadata
+            This name will be saved to NFT metadata
           </p>
         </div>
 
         <div className="p-6 flex-1 bg-slate-50">
           <h3 className="text-sm font-bold uppercase mb-4 flex items-center gap-2">
-            <MousePointer2 size={16} strokeWidth={3} /> Công cụ vẽ
+            <MousePointer2 size={16} strokeWidth={3} /> Drawing Tools
           </h3>
 
           <div className="flex flex-col gap-3">
@@ -1019,17 +1038,15 @@ export default function Editor() {
               return (
                 <div
                   key={tool.id}
-                  className={`transition-all ${
-                    isSelected ? "translate-x-2" : ""
-                  }`}
+                  className={`transition-all ${isSelected ? "translate-x-2" : ""
+                    }`}
                 >
                   <button
                     onClick={() => setSelectedToolId(tool.id)}
-                    className={`w-full flex items-center gap-4 p-3 text-left border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,0.2)] hover:shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] hover:translate-x-[2px] hover:translate-y-[2px] transition-all ${
-                      isSelected
-                        ? "bg-orange-500 text-white shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] translate-y-[2px]"
-                        : "bg-white text-slate-900"
-                    }`}
+                    className={`w-full flex items-center gap-4 p-3 text-left border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,0.2)] hover:shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] hover:translate-x-[2px] hover:translate-y-[2px] transition-all ${isSelected
+                      ? "bg-orange-500 text-white shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] translate-y-[2px]"
+                      : "bg-white text-slate-900"
+                      }`}
                   >
                     <div
                       className="w-10 h-10 border-2 border-slate-900 flex items-center justify-center shrink-0 bg-white"
@@ -1039,23 +1056,11 @@ export default function Editor() {
                           : tool.color || "white",
                       }}
                     >
-                      {isWall &&
-                        wallConfigs[tool.id].type === "image" &&
-                        wallConfigs[tool.id].imgUrl && (
-                          <img
-                            src={wallConfigs[tool.id].imgUrl}
-                            alt=""
-                            className="w-full h-full object-cover"
-                            onError={(e) => (e.target.style.display = "none")}
-                          />
-                        )}
-
                       {!isWall && tool.icon && (
                         <tool.icon
                           size={20}
-                          className={`relative z-10 ${
-                            isSelected ? "text-white" : "text-slate-900"
-                          }`}
+                          className={`relative z-10 ${isSelected ? "text-white" : "text-slate-900"
+                            }`}
                           strokeWidth={2.5}
                         />
                       )}
@@ -1068,100 +1073,17 @@ export default function Editor() {
 
                   {isWall && isSelected && (
                     <div className="mt-2 ml-4 p-3 border-l-4 border-slate-900 bg-white shadow-sm animate-in slide-in-from-left-2">
-                      <div className="flex gap-2 mb-3">
-                        <button
-                          onClick={() =>
-                            updateWallConfig(tool.id, "type", "color")
+                      <div className="flex items-center gap-2 border-2 border-slate-200 p-1 bg-slate-100">
+                        <Palette size={16} className="text-slate-500" />
+                        <input
+                          type="color"
+                          value={wallConfigs[tool.id].color}
+                          onChange={(e) =>
+                            updateWallConfig(tool.id, "color", e.target.value)
                           }
-                          className={`flex-1 text-[10px] font-bold py-1 border-2 border-slate-900 ${
-                            wallConfigs[tool.id].type === "color"
-                              ? "bg-slate-900 text-white"
-                              : "bg-white"
-                          }`}
-                        >
-                          MÀU
-                        </button>
-
-                        <button
-                          onClick={() =>
-                            updateWallConfig(tool.id, "type", "image")
-                          }
-                          className={`flex-1 text-[10px] font-bold py-1 border-2 border-slate-900 ${
-                            wallConfigs[tool.id].type === "image"
-                              ? "bg-slate-900 text-white"
-                              : "bg-white"
-                          }`}
-                        >
-                          ẢNH
-                        </button>
+                          className="bg-transparent w-full h-8 cursor-pointer"
+                        />
                       </div>
-
-                      {wallConfigs[tool.id].type === "color" ? (
-                        <div className="flex items-center gap-2 border-2 border-slate-200 p-1 bg-slate-100">
-                          <Palette size={16} className="text-slate-500" />
-                          <input
-                            type="color"
-                            value={wallConfigs[tool.id].color}
-                            onChange={(e) =>
-                              updateWallConfig(tool.id, "color", e.target.value)
-                            }
-                            className="bg-transparent w-full h-8 cursor-pointer"
-                          />
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <input
-                            type="text"
-                            placeholder="Dán URL ảnh..."
-                            value={
-                              wallConfigs[tool.id].imgUrl.startsWith("blob:")
-                                ? "(File từ máy)"
-                                : wallConfigs[tool.id].imgUrl
-                            }
-                            onChange={(e) =>
-                              updateWallConfig(
-                                tool.id,
-                                "imgUrl",
-                                e.target.value
-                              )
-                            }
-                            className="w-full text-[10px] font-mono border-2 border-slate-300 p-1 focus:border-orange-500 outline-none bg-slate-50"
-                          />
-
-                          <div className="flex gap-2">
-                            <div className="flex-1 relative group">
-                              <input
-                                type="file"
-                                accept="image/*"
-                                id={`file-${tool.id}`}
-                                className="hidden"
-                                onChange={(e) => handleFileUpload(tool.id, e)}
-                              />
-                              <label
-                                htmlFor={`file-${tool.id}`}
-                                className="block text-center border-2 border-slate-900 bg-slate-200 hover:bg-white py-1 text-[10px] font-bold cursor-pointer transition-colors"
-                              >
-                                UPLOAD
-                              </label>
-                            </div>
-
-                            <button
-                              onClick={() =>
-                                updateWallConfig(
-                                  tool.id,
-                                  "imgUrl",
-                                  Object.values(PRESETS)[
-                                    parseInt(tool.id) - 1
-                                  ] || PRESETS.BRICK
-                                )
-                              }
-                              className="flex-1 border-2 border-slate-900 bg-slate-200 hover:bg-white py-1 text-[10px] font-bold transition-colors"
-                            >
-                              MẪU
-                            </button>
-                          </div>
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
@@ -1173,53 +1095,62 @@ export default function Editor() {
 
       {/* MAIN AREA - TÁCH BIỆT HOÀN TOÀN EDITOR VÀ PLAYER */}
 
-      <div className="flex-1 relative flex flex-col overflow-hidden">
+      <div className="flex-1 relative flex flex-col overflow-hidden mt-14">
         {/* TOP BAR (Luôn hiển thị) */}
 
-        <div className="absolute top-6 right-6 z-50 flex gap-4 items-center" data-ui="1">
-          {mode === "EDIT" ? (
-            <>
-              <RetroButton
-                onClick={() => {
-                  if (validateMap()) setMode("PLAY");
-                }}
-                className="bg-green-500 hover:bg-green-400 text-white flex items-center gap-2"
-              >
-                <Play size={18} fill="currentColor" strokeWidth={3} /> CHƠI THỬ
-              </RetroButton>
+        <div className="absolute top-6 left-6 right-6 z-50 flex justify-between items-center" data-ui="1">
+          <RetroButton
+            onClick={() => navigate("/")}
+            className="bg-slate-700 hover:bg-slate-600 text-white flex items-center gap-2"
+          >
+            <ArrowLeft size={18} strokeWidth={3} /> HOME
+          </RetroButton>
 
-              <div className="flex gap-2">
+          <div className="flex gap-4 items-center">
+            {mode === "EDIT" ? (
+              <>
                 <RetroButton
-                  onClick={handleExport}
-                  className="bg-purple-500 hover:bg-purple-400 text-white flex items-center gap-2"
+                  onClick={() => {
+                    if (validateMap()) setMode("PLAY");
+                  }}
+                  className="bg-green-500 hover:bg-green-400 text-white flex items-center gap-2"
                 >
-                  <Download size={18} strokeWidth={3} /> SAVE
+                  <Play size={18} fill="currentColor" strokeWidth={3} /> PLAY TEST
                 </RetroButton>
-                <RetroButton
-                  onClick={handleSaveAndMint}
-                  disabled={isUploading || isMinting}
-                  className="bg-pink-500 hover:bg-pink-400 text-white flex items-center gap-2"
-                >
-                  {isUploading || isMinting ? "ĐANG XỬ LÝ..." : "SAVE & MINT"}
-                </RetroButton>
-              </div>
-            </>
-          ) : (
-            <RetroButton
-              onClick={(e) => {
-                e.stopPropagation();
-                setMode("EDIT");
-              }}
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                setMode("EDIT");
-              }}
-              className="bg-yellow-500 hover:bg-yellow-400 text-white flex items-center gap-2"
-            >
-              <Edit3 size={18} strokeWidth={3} /> SỬA MAP
-            </RetroButton>
-          )}
+
+                <div className="flex gap-2">
+                  {/* <RetroButton
+                    onClick={handleExport}
+                    className="bg-purple-500 hover:bg-purple-400 text-white flex items-center gap-2"
+                  >
+                    <Download size={18} strokeWidth={3} /> SAVE
+                  </RetroButton> */}
+                  <RetroButton
+                    onClick={handleSaveAndMint}
+                    disabled={isUploading || isMinting}
+                    className="bg-pink-500 hover:bg-pink-400 text-white flex items-center gap-2"
+                  >
+                    {isUploading || isMinting ? "PROCESSING..." : "SAVE & MINT"}
+                  </RetroButton>
+                </div>
+              </>
+            ) : (
+              <RetroButton
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMode("EDIT");
+                }}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  setMode("EDIT");
+                }}
+                className="bg-yellow-500 hover:bg-yellow-400 text-white flex items-center gap-2"
+              >
+                <Edit3 size={18} strokeWidth={3} /> EDIT MAP
+              </RetroButton>
+            )}
+          </div>
         </div>
 
         {mintStatus && (
@@ -1231,13 +1162,22 @@ export default function Editor() {
         {/* Toast Notification */}
         {toast && (
           <div
-            className={`fixed top-20 right-6 z-50 px-4 py-3 border-2 border-slate-900 shadow-[6px_6px_0px_0px_rgba(15,23,42,1)] font-bold text-sm transition-all animate-in slide-in-from-right ${
-              toast.type === "success"
-                ? "bg-green-500 text-white"
-                : "bg-red-500 text-white"
-            }`}
+            className={`fixed top-20 right-6 z-50 px-4 py-3 border-2 border-slate-900 shadow-[6px_6px_0px_0px_rgba(15,23,42,1)] font-bold text-sm transition-all animate-in slide-in-from-right ${toast.type === "success"
+              ? "bg-green-500 text-white"
+              : "bg-red-500 text-white"
+              }`}
           >
             {toast.message}
+          </div>
+        )}
+
+        {/* Loading Overlay */}
+        {loadingMap && (
+          <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center bg-white/90 backdrop-blur-sm">
+            <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-orange-500 mb-4"></div>
+            <p className="text-lg font-bold text-slate-700 animate-pulse">
+              Loading map data...
+            </p>
           </div>
         )}
 
@@ -1256,9 +1196,8 @@ export default function Editor() {
               <div className="flex items-center justify-center min-w-[2000px] min-h-[2000px] p-20">
                 <div
                   ref={editorGridRef}
-                  className={`bg-white p-2 border-4 border-slate-900 shadow-[20px_20px_0px_0px_rgba(15,23,42,0.2)] transition-transform duration-100 origin-center ${
-                    isZoomMode ? "" : "cursor-crosshair"
-                  }`}
+                  className={`bg-white p-2 border-4 border-slate-900 shadow-[20px_20px_0px_0px_rgba(15,23,42,0.2)] transition-transform duration-100 origin-center ${isZoomMode ? "" : "cursor-crosshair"
+                    }`}
                 >
                   <div
                     style={{
@@ -1279,30 +1218,10 @@ export default function Editor() {
 
                         let icon = null;
 
-                        let isImageMissing = false;
-
                         const wallConfig = wallConfigs[cellChar];
 
                         if (wallConfig) {
-                          if (wallConfig.type === "color") {
-                            bgStyle = { backgroundColor: wallConfig.color };
-                          } else if (wallConfig.type === "image") {
-                            if (wallConfig.imgUrl) {
-                              bgStyle = {
-                                backgroundImage: `url(${wallConfig.imgUrl})`,
-                                backgroundSize: "cover",
-                              };
-                            } else {
-                              isImageMissing = true;
-                              bgStyle = {
-                                backgroundColor: "#e2e8f0",
-                                backgroundImage:
-                                  "repeating-linear-gradient(45deg, #cbd5e1 0, #cbd5e1 1px, #f1f5f9 1px, #f1f5f9 8px)",
-                              };
-                            }
-                          } else {
-                            bgStyle = { backgroundColor: wallConfig.color };
-                          }
+                          bgStyle = { backgroundColor: wallConfig.color };
                         } else if (cellChar === "@")
                           icon = (
                             <User
@@ -1355,13 +1274,6 @@ export default function Editor() {
                             )}
 
                             {icon}
-
-                            {isImageMissing && (
-                              <ImageIcon
-                                size={14 * zoom}
-                                className="text-slate-400"
-                              />
-                            )}
                           </div>
                         );
                       })
@@ -1377,11 +1289,10 @@ export default function Editor() {
               <div className="bg-white border-2 border-slate-900 p-1 flex gap-1 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)]">
                 <button
                   onClick={() => setIsZoomMode(!isZoomMode)}
-                  className={`p-2 border-2 border-slate-900 font-bold text-xs flex items-center gap-2 transition-all ${
-                    isZoomMode
-                      ? "bg-red-500 text-white"
-                      : "bg-slate-200 text-slate-700 hover:bg-white"
-                  }`}
+                  className={`p-2 border-2 border-slate-900 font-bold text-xs flex items-center gap-2 transition-all ${isZoomMode
+                    ? "bg-red-500 text-white"
+                    : "bg-slate-200 text-slate-700 hover:bg-white"
+                    }`}
                 >
                   {isZoomMode ? (
                     <Hand size={16} strokeWidth={3} />
@@ -1389,7 +1300,7 @@ export default function Editor() {
                     <Search size={16} strokeWidth={3} />
                   )}
 
-                  {isZoomMode ? "CHẾ ĐỘ: KÉO/ZOOM" : "CHẾ ĐỘ: VẼ"}
+                  {isZoomMode ? "MODE: DRAG/ZOOM" : "MODE: DRAW"}
                 </button>
               </div>
 
@@ -1453,7 +1364,7 @@ export default function Editor() {
                     Click to Play
                   </p>
                   <p className="text-sm text-slate-600 text-center">
-                    Click vào khu vực game để bắt đầu
+                    Click game area to start
                   </p>
                 </div>
               </div>
@@ -1484,12 +1395,12 @@ export default function Editor() {
 
               {/* Score */}
               <div className="mb-6">
-                <p className="text-lg font-bold text-slate-600 mb-1">Điểm số</p>
+                <p className="text-lg font-bold text-slate-600 mb-1">Score</p>
                 <p className="text-3xl font-black text-orange-500">
                   {winScore.collected} / {winScore.total}
                 </p>
                 <p className="text-sm text-slate-500 mt-1">
-                  Kho báu đã thu thập
+                  Treasures collected
                 </p>
               </div>
 
@@ -1499,7 +1410,7 @@ export default function Editor() {
                 className="w-full px-6 py-3 bg-green-500 hover:bg-green-400 text-white font-bold text-lg border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all flex items-center justify-center gap-2"
               >
                 <RotateCcw size={20} strokeWidth={3} />
-                Chơi lại
+                Play Again
               </button>
             </div>
           </div>

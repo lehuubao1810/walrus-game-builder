@@ -104,7 +104,7 @@ export const fetchDungeonById = async (objectId) => {
   if (!DUNGEON_TYPE) return null;
   const resp = await client.getObject({
     id: objectId,
-    options: { showContent: true },
+    options: { showContent: true, showOwner: true },
   });
   const content = resp.data?.content;
   if (!content || content.dataType !== "moveObject") return null;
@@ -112,6 +112,7 @@ export const fetchDungeonById = async (objectId) => {
   const f = content.fields;
   return {
     id: resp.data.objectId,
+    owner: resp.data.owner?.AddressOwner || null, // Parse owner address
     name: f.name,
     blobId: f.blob_id,
     patchMapId: f.patch_map_id,

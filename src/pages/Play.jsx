@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import kaboom from "kaboom";
 import { ArrowLeft, Edit3, Trophy, RotateCcw } from "lucide-react";
+import { useCurrentAccount, ConnectButton } from "@mysten/dapp-kit";
 import {
   fetchDungeonById,
   readDungeonMap,
@@ -11,6 +12,7 @@ import { PACKAGE_ID } from "../config/sui";
 
 export default function Play() {
   const { id } = useParams();
+  const account = useCurrentAccount();
   const gameContainerRef = useRef(null);
   const [gameData, setGameData] = useState(null);
   const [scale, setScale] = useState(1);
@@ -64,15 +66,47 @@ export default function Play() {
           const onchain = await fetchDungeonById(id);
           if (onchain) {
             game = onchain;
+
+            // Check ownership
+            const isOwner =
+              account?.address &&
+              onchain.owner &&
+              onchain.owner.toLowerCase() === account.address.toLowerCase();
+
+            if (!account) {
+              if (active) {
+                setGameData(null);
+                setMapError(
+                  <div className="flex flex-col items-center justify-center wallet-connect-btn">
+                    <p className="mb-4">PLEASE CONNECT WALLET: You need to connect wallet to play.</p>
+                    <ConnectButton />
+                  </div>
+                );
+              }
+              return;
+            }
+
+            if (!isOwner) {
+              console.warn("Play Page: Ownership mismatch", {
+                dungeonOwner: onchain.owner,
+                currentAccount: account?.address
+              });
+              if (active) {
+                setGameData(null);
+                setMapError("UNAUTHORIZED: You are not the owner.");
+              }
+              return;
+            }
+
             if (active) setGameData(game);
 
             setLoadingMap(true);
             setMapError(null);
             try {
               const idToUse = onchain.patchMapId || onchain.blobId;
-              if (!idToUse) throw new Error("Không có patchMapId hoặc blobId");
+              if (!idToUse) throw new Error("No patchMapId or blobId");
               const mapJson = await readDungeonMap(idToUse);
-              if (!validateMapJsonSchema(mapJson)) throw new Error("Map không hợp lệ");
+              if (!validateMapJsonSchema(mapJson)) throw new Error("Invalid Map");
 
               if (active) {
                 setGameData({ ...game, settings: mapJson });
@@ -108,7 +142,7 @@ export default function Play() {
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [id, account]);
 
   // AUTO PLAY: khi map sẵn sàng lần đầu -> tự focus để chơi liền
   useEffect(() => {
@@ -191,7 +225,7 @@ export default function Play() {
             const p = k
               .loadSprite(`wall_${key}`, asset.value)
               .then(() => validSprites.add(key))
-              .catch(() => {});
+              .catch(() => { });
             loadPromises.push(p);
           }
 
@@ -368,12 +402,12 @@ export default function Play() {
   if (!gameData) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-orange-50 text-slate-900">
-        <p className="text-lg font-bold mb-4">Không tìm thấy map</p>
+        <p className="text-lg font-bold mb-4">Map not found</p>
         <Link
           to="/"
           className="px-4 py-2 border-2 border-slate-900 bg-white shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] font-bold"
         >
-          Quay về trang chủ
+          Return to Home
         </Link>
       </div>
     );
@@ -432,14 +466,24 @@ export default function Play() {
           {loadingMap && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 z-20">
               <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-orange-500 mb-4"></div>
-              <p className="text-sm font-bold text-slate-700">Đang tải map...</p>
+              <p className="text-sm font-bold text-slate-700">Loading map...</p>
             </div>
           )}
 
-          {mapError && !loadingMap && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 z-20">
-              <p className="text-sm font-bold text-red-600 mb-2">Lỗi tải map</p>
-              <p className="text-xs text-slate-600">{mapError}</p>
+          {mapError && (
+            <div className="absolute inset-0 flex items-center justify-center bg-red-50 z-[60]">
+              <div className="text-center p-8 bg-white border-4 border-red-500 shadow-xl max-w-md">
+                <h2 className="text-2xl font-black text-red-600 mb-4">ERROR</h2>
+                <div className="text-slate-700 font-bold font-mono whitespace-pre-wrap">
+                  {mapError}
+                </div>
+                <Link
+                  to="/"
+                  className="inline-block mt-6 px-6 py-2 bg-slate-900 text-white font-bold uppercase hover:bg-slate-700"
+                >
+                  Return to Home
+                </Link>
+              </div>
             </div>
           )}
 
@@ -483,15 +527,13 @@ export default function Play() {
       </div>
 
       <div className="mt-6 px-4 py-3 bg-white/80 border-2 border-slate-900 shadow-[6px_6px_0px_0px_rgba(15,23,42,0.6)] text-sm font-mono text-slate-800 text-center max-w-3xl">
-        <div className="font-bold mb-2">Hướng dẫn</div>
+        <div className="font-bold mb-2">Instructions</div>
         <div className="flex flex-wrap justify-center gap-4">
-          <span>← / → : Di chuyển</span>
-          <span>↑ hoặc Space: Nhảy</span>
-          <span>@ : Nhân vật</span>
-          <span>$ : Coin</span>
-          <span>E : Enemy</span>
-          <span>^ : Bẫy</span>
-          <span>1/2/3 : Tường</span>
+          <span>← / → : Move</span>
+          <span>↑ or Space: Jump</span>
+          <span>
+            $ Collect all coins to win
+          </span>
         </div>
       </div>
 
@@ -511,11 +553,11 @@ export default function Play() {
               <h2 className="text-4xl font-black text-slate-900 mb-2">YOU WIN!</h2>
 
               <div className="mb-6">
-                <p className="text-lg font-bold text-slate-600 mb-1">Điểm số</p>
+                <p className="text-lg font-bold text-slate-600 mb-1">Score</p>
                 <p className="text-3xl font-black text-orange-500">
                   {winScore.collected} / {winScore.total}
                 </p>
-                <p className="text-sm text-slate-500 mt-1">Kho báu đã thu thập</p>
+                <p className="text-sm text-slate-500 mt-1">Treasures collected</p>
               </div>
 
               <button
@@ -523,7 +565,7 @@ export default function Play() {
                 className="w-full px-6 py-3 bg-green-500 hover:bg-green-400 text-white font-bold text-lg border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all flex items-center justify-center gap-2"
               >
                 <RotateCcw size={20} strokeWidth={3} />
-                Chơi lại
+                Play Again
               </button>
             </div>
           </div>

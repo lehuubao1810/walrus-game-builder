@@ -165,6 +165,85 @@ export function useWalrusUpload() {
     [uploadMap, uploadImage]
   );
 
-  return { uploadFiles, uploadMap, uploadImage, isUploading };
+  // Combined upload: Map JSON + Thumbnail Image in one flow
+  const uploadCombinedDungeon = useCallback(
+    async (mapJson, imageBlob) => {
+      if (!account) throw new Error("Wallet not connected");
+      setIsUploading(true);
+      try {
+        const client = await createWalrusClient();
+
+        // 1. Prepare JSON Map file
+        const jsonBytes = new TextEncoder().encode(
+          JSON.stringify(mapJson, null, 2)
+        );
+        const mapFileName = `dungeon-map-${Date.now()}.json`;
+        const mapFile = walrusFileFromBytes(
+          mapFileName,
+          jsonBytes,
+          "application/json"
+        );
+
+        // 2. Prepare Image file
+        const buffer = await imageBlob.arrayBuffer();
+        const imageFileName = `dungeon-thumb-${Date.now()}.png`;
+        const imageFile = walrusFileFromBytes(
+          imageFileName,
+          new Uint8Array(buffer),
+          imageBlob.type || "image/png"
+        );
+
+        // 3. Create combined flow
+        const files = [mapFile, imageFile];
+        const flow = client.walrus.writeFilesFlow({ files });
+        await flow.encode();
+
+        // 4. Register (single transaction for both files)
+        const registerTx = flow.register({
+          epochs: WALRUS_EPOCHS,
+          owner: account.address,
+          deletable: true,
+        });
+        const registerDigest = await executeTransaction(registerTx);
+
+        // 5. Upload
+        await flow.upload({ digest: registerDigest });
+
+        // 6. Certify (single transaction)
+        const certifyTx = flow.certify();
+        await executeTransaction(certifyTx);
+
+        // 7. Get Results
+        const uploaded = await flow.listFiles();
+        if (uploaded.length < 2) throw new Error("Upload failed: missing files");
+
+        // Identify which file is which based on media_type or exact order
+        // walrusFileFromBytes sets content-type in tags, but listFiles metadata might differ slightly depending on node
+        // Best reliance: order is preserved or check content type if available.
+        // Assuming order [map, image] because that's how we passed it.
+        // Or cleaner: check media_type if available in response, or name if available.
+        // The mocked response usually preserves order.
+
+        const mapResult = uploaded[0];
+        const imageResult = uploaded[1];
+
+        return {
+          mapCtx: {
+            blobId: mapResult.blobId,
+            patchId: mapResult.id,
+          },
+          imageCtx: {
+            blobId: imageResult.blobId,
+            patchId: imageResult.id,
+          },
+        };
+      } finally {
+        setIsUploading(false);
+      }
+    },
+    [account, executeTransaction]
+  );
+
+  return { uploadFiles, uploadMap, uploadImage, uploadCombinedDungeon, isUploading };
 }
 

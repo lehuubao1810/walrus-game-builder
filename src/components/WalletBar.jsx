@@ -1,4 +1,4 @@
-import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
+import { ConnectButton, useCurrentAccount, useSuiClientQuery } from "@mysten/dapp-kit";
 
 const shorten = (addr) =>
   addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : "Not connected";
@@ -6,15 +6,24 @@ const shorten = (addr) =>
 export function WalletBar() {
   const account = useCurrentAccount();
 
+  const { data: balance } = useSuiClientQuery(
+    "getBalance",
+    {
+      owner: account?.address,
+    },
+    {
+      enabled: !!account,
+    },
+  );
+
   return (
-    <div className="w-full flex justify-end items-center gap-3 py-2 px-4">
-      {account && (
+    <div className="wallet-connect-btn w-full flex justify-end items-center gap-3 h-14 px-4 mb-6 py-2 pb-3">
+      {account && balance && (
         <span className="text-xs font-mono text-slate-600">
-          {shorten(account.address)}
+          {(Number(balance.totalBalance) / 1e9).toFixed(2)} SUI
         </span>
       )}
       <ConnectButton />
     </div>
   );
 }
-
