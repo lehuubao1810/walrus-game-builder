@@ -1,8 +1,5 @@
 import { ConnectButton, useCurrentAccount, useSuiClientQuery } from "@mysten/dapp-kit";
 
-const shorten = (addr) =>
-  addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : "Not connected";
-
 export function WalletBar() {
   const account = useCurrentAccount();
 

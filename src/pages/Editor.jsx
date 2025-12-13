@@ -1154,7 +1154,7 @@ export default function Editor() {
         </div>
 
         {mintStatus && (
-          <div className="absolute top-6 left-6 z-50 bg-white border-2 border-slate-900 px-3 py-2 shadow-[6px_6px_0px_0px_rgba(15,23,42,0.6)] text-xs font-mono">
+          <div className="absolute top-14 left-6 z-50 bg-white border-2 border-slate-900 px-3 py-2 shadow-[6px_6px_0px_0px_rgba(15,23,42,0.6)] text-xs font-mono">
             {mintStatus}
           </div>
         )}

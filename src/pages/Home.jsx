@@ -71,7 +71,7 @@ export default function Home() {
                   {/* ConnectButton is already in WalletBar but we can render another one or guide user */}
                   {/* Using a visual cue to point to top right or just text */}
                   <div className="animate-pulse font-bold text-orange-600">
-                    ↗ Please connect wallet top right
+                    Please connect wallet top right
                   </div>
                 </div>
               </div>
