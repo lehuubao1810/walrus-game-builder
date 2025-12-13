@@ -947,11 +947,11 @@ export default function Editor() {
         <div className="p-6 border-b-4 border-slate-900 bg-orange-100">
           <h1 className="text-2xl font-black tracking-tighter text-orange-600 drop-shadow-sm flex items-center gap-2">
             <Box strokeWidth={3} /> WALRUS{" "}
-            <span className="text-slate-900">BUILDER</span>
+            <span className="text-slate-900">DUNGEON</span>
           </h1>
 
           <p className="text-xs font-bold text-slate-500 mt-1 uppercase tracking-widest">
-            Pixel Dungeon Editor v1.5
+            Walrus Dungeon Editor
           </p>
         </div>
 
