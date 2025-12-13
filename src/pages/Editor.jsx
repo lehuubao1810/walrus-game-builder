@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import kaboom from "kaboom";
 
@@ -20,6 +20,8 @@ import {
   ZoomOut,
   Search,
   Hand,
+  Trophy,
+  RotateCcw,
 } from "lucide-react";
 import { WalletBar } from "../components/WalletBar";
 import { useWalrusUpload } from "../hooks/useWalrusUpload";
@@ -132,6 +134,16 @@ export default function Editor() {
 
   const [isZoomMode, setIsZoomMode] = useState(false);
   const [mintStatus, setMintStatus] = useState("");
+  const [dungeonName, setDungeonName] = useState("Walrus Dungeon Map");
+  const [toast, setToast] = useState(null);
+  const [showWinModal, setShowWinModal] = useState(false);
+  const [winScore, setWinScore] = useState({ collected: 0, total: 0 });
+  // mặc định false, nhưng sẽ auto-activate 1 lần sau khi load xong
+  const [isGameFocused, setIsGameFocused] = useState(false);
+  const isGameFocusedRef = useRef(false);
+
+  // đảm bảo auto-activate chỉ chạy 1 lần cho mỗi lần vào PLAY mode
+  const hasAutoActivatedRef = useRef(false);
 
   const scrollContainerRef = useRef(null);
 
@@ -140,10 +152,68 @@ export default function Editor() {
   const dragStart = useRef({ x: 0, y: 0, left: 0, top: 0 });
 
   const gameContainerRef = useRef(null);
+  const kaboomInstanceRef = useRef(null);
+  const gameWrapperRef = useRef(null);
 
   const editorGridRef = useRef(null);
   const { uploadMap, uploadImage, isUploading } = useWalrusUpload();
   const { mintDungeon, isMinting } = useDungeonMint();
+
+  // Helper để kiểm tra element có thuộc "safe zone" (UI) không
+  const shouldIgnoreBlur = useCallback((target) => {
+    return !!target?.closest?.('[data-ui="1"]');
+  }, []);
+
+  const focusGameCanvas = useCallback(() => {
+    const root = gameContainerRef.current;
+    if (!root) return;
+
+    const canvas = root.querySelector("canvas");
+    if (!canvas) return;
+
+    if (!canvas.hasAttribute("tabindex")) canvas.setAttribute("tabindex", "0");
+
+    try {
+      canvas.focus({ preventScroll: true });
+    } catch {
+      canvas.focus();
+    }
+  }, []);
+
+  const activateGame = useCallback(() => {
+    setIsGameFocused(true);
+    isGameFocusedRef.current = true;
+
+    // overlay unmount xong mới focus
+    requestAnimationFrame(() => {
+      focusGameCanvas();
+    });
+  }, [focusGameCanvas]);
+
+  // Reset auto-activate khi chuyển mode
+  useEffect(() => {
+    if (mode === "PLAY") {
+      hasAutoActivatedRef.current = false;
+      setIsGameFocused(false);
+      isGameFocusedRef.current = false;
+    }
+  }, [mode]);
+
+  // AUTO PLAY: khi chuyển sang PLAY mode và game sẵn sàng -> tự focus để chơi liền
+  useEffect(() => {
+    if (mode !== "PLAY") return;
+    if (hasAutoActivatedRef.current) return;
+    if (showWinModal) return;
+    if (!gameContainerRef.current) return;
+
+    // Đợi một chút để kaboom init xong
+    const timer = setTimeout(() => {
+      hasAutoActivatedRef.current = true;
+      activateGame();
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [mode, showWinModal, activateGame]);
 
   // Nạp dữ liệu map on-chain theo id
   useEffect(() => {
@@ -175,6 +245,9 @@ export default function Editor() {
           };
         });
         setWallConfigs(nextWalls);
+        if (mapJson?.meta?.title) {
+          setDungeonName(mapJson.meta.title);
+        }
         setMode("EDIT");
       } catch (err) {
         console.error(err);
@@ -349,34 +422,54 @@ export default function Editor() {
     setMapData(newMap);
   };
 
+  // Hiển thị toast message
+  const showToast = (message, type = "error") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
   // Validate map trước khi PLAY hoặc Export
   const validateMap = () => {
     const flat = mapData.flat();
-    const allowedChars = new Set([...Object.keys(wallConfigs), "@", "$", "E", "^", " "]);
+    const allowedChars = new Set([
+      ...Object.keys(wallConfigs),
+      "@",
+      "$",
+      "E",
+      "^",
+      " ",
+    ]);
 
     // Ít nhất 1 player
     const playerCount = flat.filter((c) => c === "@").length;
     if (playerCount !== 1) {
-      alert("Map cần có đúng 1 nhân vật (@).");
+      showToast("Map cần có đúng 1 nhân vật (@).");
+      return false;
+    }
+
+    // Ít nhất 1 kho báu
+    const coinCount = flat.filter((c) => c === "$").length;
+    if (coinCount < 1) {
+      showToast("Map cần có tối thiểu 1 kho báu ($).");
       return false;
     }
 
     // Không toàn ô trống
     if (flat.every((c) => c === " ")) {
-      alert("Map không được để trống toàn bộ.");
+      showToast("Map không được để trống toàn bộ.");
       return false;
     }
 
     // Kiểm tra legend (chỉ ký tự cho phép)
     const hasIllegal = flat.some((c) => !allowedChars.has(c));
     if (hasIllegal) {
-      alert("Map chứa ký tự không hợp lệ (ngoài legend cho phép).");
+      showToast("Map chứa ký tự không hợp lệ (ngoài legend cho phép).");
       return false;
     }
 
     // Giới hạn kích thước
     if (mapSize.width > 300 || mapSize.height > 100) {
-      alert("Kích thước vượt giới hạn 300x100.");
+      showToast("Kích thước vượt giới hạn 300x100.");
       return false;
     }
 
@@ -405,7 +498,7 @@ export default function Editor() {
 
     return {
       meta: {
-        title: "Walrus Dungeon Map",
+        title: dungeonName || "Walrus Dungeon Map",
         created: new Date().toISOString(),
         engine: "Kaboom.js",
         version: "1.1",
@@ -423,7 +516,7 @@ export default function Editor() {
   const handleExport = () => {
     const exportData = buildMapPayload();
     console.log("Exported map:", exportData);
-    alert("Đã log dữ liệu map ra console.");
+    showToast("Đã log dữ liệu map ra console.", "success");
   };
 
   const handleSaveAndMint = async () => {
@@ -431,7 +524,7 @@ export default function Editor() {
     try {
       setMintStatus("Uploading map to Walrus...");
       const mapJson = buildMapPayload();
-      
+
       // Upload map lên Walrus
       const mapResult = await uploadMap(mapJson);
       console.log("mapResult", mapResult);
@@ -443,7 +536,7 @@ export default function Editor() {
       const thumbnail = await captureThumbnail();
       const imageResult = await uploadImage(thumbnail);
       const imagePatchId = imageResult.patchId;
-      
+
       // Tạo image URL từ patchId
       const imageUrl = `https://wal-aggregator-testnet.staketab.org/v1/blobs/by-quilt-patch-id/${imagePatchId}`;
 
@@ -456,11 +549,11 @@ export default function Editor() {
       });
 
       setMintStatus(`Mint thành công: ${digest}`);
-      // setMintStatus(`Mint thành công`);
+      showToast(`Mint thành công!`, "success");
     } catch (err) {
       console.error(err);
       setMintStatus(`Lỗi: ${err.message}`);
-      alert(err.message);
+      showToast(err.message);
     }
   };
 
@@ -529,6 +622,7 @@ export default function Editor() {
           background: [255, 247, 237],
         });
 
+        kaboomInstanceRef.current = k;
         k.setGravity(1600);
 
         function patrol(speed = 60, dir = 1) {
@@ -664,6 +758,11 @@ export default function Editor() {
 
             const players = level.get("player");
 
+            // Đếm tổng số coin ban đầu
+            const totalCoins = mapData.flat().filter((c) => c === "$").length;
+            let collectedCoins = 0;
+            let isWon = false;
+
             if (players.length > 0) {
               const player = players[0];
 
@@ -674,6 +773,7 @@ export default function Editor() {
               k.camPos(player.pos);
 
               player.onUpdate(() => {
+                if (isWon) return; // Dừng update khi đã win
                 k.camPos(player.pos);
 
                 if (player.pos.y > mapSize.height * BASE_TILE_SIZE + 200) {
@@ -683,12 +783,17 @@ export default function Editor() {
                 }
               });
 
-              k.onKeyDown("left", () => player.move(-SPEED, 0));
+              k.onKeyDown("left", () => {
+                if (!isWon && isGameFocusedRef.current) player.move(-SPEED, 0);
+              });
 
-              k.onKeyDown("right", () => player.move(SPEED, 0));
+              k.onKeyDown("right", () => {
+                if (!isWon && isGameFocusedRef.current) player.move(SPEED, 0);
+              });
 
               const jump = () => {
-                if (player.isGrounded()) player.jump(JUMP_FORCE);
+                if (!isWon && isGameFocusedRef.current && player.isGrounded())
+                  player.jump(JUMP_FORCE);
               };
 
               k.onKeyPress("up", jump);
@@ -696,8 +801,24 @@ export default function Editor() {
               k.onKeyPress("space", jump);
 
               player.onCollide("coin", (c) => {
+                if (isWon) return;
                 k.destroy(c);
                 k.shake(2);
+                collectedCoins++;
+
+                // Kiểm tra win condition
+                if (collectedCoins >= totalCoins) {
+                  isWon = true;
+                  k.shake(10);
+                  k.addKaboom(player.pos);
+
+                  // Hiển thị win modal
+                  setWinScore({ collected: collectedCoins, total: totalCoins });
+                  setShowWinModal(true);
+
+                  setIsGameFocused(false);
+                  isGameFocusedRef.current = false;
+                }
               });
 
               player.onCollide("danger", () => {
@@ -710,21 +831,65 @@ export default function Editor() {
           });
 
           k.go("main");
+
+          // nếu đang focused thì focus canvas ngay sau khi scene ready
+          if (isGameFocusedRef.current) {
+            requestAnimationFrame(() => focusGameCanvas());
+          }
         });
       } catch (err) {
         console.error(err);
       }
     }
 
-     return () => {
-       isCleanedUp = true;
-       if (k && k.quit) k.quit();
-     };
-   }, [mode, mapData, mapSize, wallConfigs]);
+    return () => {
+      isCleanedUp = true;
+      if (k && k.quit) k.quit();
+    };
+  }, [mode, mapData, mapSize, wallConfigs, focusGameCanvas]);
 
-  const RetroButton = ({ onClick, active, children, className, disabled }) => (
+  // Click outside: blur game (Editor PLAY mode)
+  useEffect(() => {
+    if (mode !== "PLAY") {
+      // Reset focus khi không phải PLAY mode
+      setIsGameFocused(false);
+      isGameFocusedRef.current = false;
+      return;
+    }
+
+    const handlePointerDownOutside = (event) => {
+      // Bỏ qua khi click vào UI (safe zone)
+      if (shouldIgnoreBlur(event.target)) return;
+
+      if (
+        gameWrapperRef.current &&
+        !gameWrapperRef.current.contains(event.target)
+      ) {
+        setIsGameFocused(false);
+        isGameFocusedRef.current = false;
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDownOutside, true);
+    return () => {
+      document.removeEventListener(
+        "pointerdown",
+        handlePointerDownOutside,
+        true
+      );
+    };
+  }, [mode, shouldIgnoreBlur]);
+
+  // Sync ref with state (và focus lại canvas nếu state chuyển true)
+  useEffect(() => {
+    isGameFocusedRef.current = isGameFocused;
+    if (isGameFocused) requestAnimationFrame(() => focusGameCanvas());
+  }, [isGameFocused, focusGameCanvas]);
+
+  const RetroButton = ({ onClick, onPointerDown, active, children, className, disabled }) => (
     <button
       onClick={onClick}
+      onPointerDown={onPointerDown}
       disabled={disabled}
       className={`relative px-4 py-2 font-mono font-bold text-sm uppercase transition-all border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:translate-x-[2px] disabled:translate-y-[2px] ${
         active ? "text-white" : "text-slate-900 hover:opacity-80"
@@ -822,6 +987,22 @@ export default function Editor() {
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="p-6 border-b-4 border-slate-900 border-dashed">
+          <h3 className="text-sm font-bold uppercase mb-4 flex items-center gap-2">
+            <Edit3 size={16} strokeWidth={3} /> Tên NFT
+          </h3>
+          <input
+            type="text"
+            value={dungeonName}
+            onChange={(e) => setDungeonName(e.target.value)}
+            placeholder="Nhập tên NFT..."
+            className="w-full text-sm font-mono border-2 border-slate-900 p-2 focus:border-orange-500 focus:outline-none bg-white shadow-[2px_2px_0px_0px_rgba(15,23,42,0.2)]"
+          />
+          <p className="text-xs text-slate-500 mt-2">
+            Tên này sẽ được lưu vào NFT metadata
+          </p>
         </div>
 
         <div className="p-6 flex-1 bg-slate-50">
@@ -995,18 +1176,17 @@ export default function Editor() {
       <div className="flex-1 relative flex flex-col overflow-hidden">
         {/* TOP BAR (Luôn hiển thị) */}
 
-        <div className="absolute top-6 right-6 z-30 flex gap-4 items-center">
+        <div className="absolute top-6 right-6 z-50 flex gap-4 items-center" data-ui="1">
           {mode === "EDIT" ? (
             <>
-               <RetroButton
-                 onClick={() => {
-                   if (validateMap()) setMode("PLAY");
-                 }}
-                 className="bg-green-500 hover:bg-green-400 text-white flex items-center gap-2"
-               >
-                 <Play size={18} fill="currentColor" strokeWidth={3} />{" "}
-                 CHƠI THỬ
-               </RetroButton>
+              <RetroButton
+                onClick={() => {
+                  if (validateMap()) setMode("PLAY");
+                }}
+                className="bg-green-500 hover:bg-green-400 text-white flex items-center gap-2"
+              >
+                <Play size={18} fill="currentColor" strokeWidth={3} /> CHƠI THỬ
+              </RetroButton>
 
               <div className="flex gap-2">
                 <RetroButton
@@ -1026,7 +1206,15 @@ export default function Editor() {
             </>
           ) : (
             <RetroButton
-              onClick={() => setMode("EDIT")}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMode("EDIT");
+              }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                setMode("EDIT");
+              }}
               className="bg-yellow-500 hover:bg-yellow-400 text-white flex items-center gap-2"
             >
               <Edit3 size={18} strokeWidth={3} /> SỬA MAP
@@ -1035,8 +1223,21 @@ export default function Editor() {
         </div>
 
         {mintStatus && (
-          <div className="absolute top-6 left-6 z-30 bg-white border-2 border-slate-900 px-3 py-2 shadow-[6px_6px_0px_0px_rgba(15,23,42,0.6)] text-xs font-mono">
+          <div className="absolute top-6 left-6 z-50 bg-white border-2 border-slate-900 px-3 py-2 shadow-[6px_6px_0px_0px_rgba(15,23,42,0.6)] text-xs font-mono">
             {mintStatus}
+          </div>
+        )}
+
+        {/* Toast Notification */}
+        {toast && (
+          <div
+            className={`fixed top-20 right-6 z-50 px-4 py-3 border-2 border-slate-900 shadow-[6px_6px_0px_0px_rgba(15,23,42,1)] font-bold text-sm transition-all animate-in slide-in-from-right ${
+              toast.type === "success"
+                ? "bg-green-500 text-white"
+                : "bg-red-500 text-white"
+            }`}
+          >
+            {toast.message}
           </div>
         )}
 
@@ -1218,7 +1419,16 @@ export default function Editor() {
         {/* --- KHÔNG GIAN PLAY (FIXED CENTERED) --- */}
 
         {mode === "PLAY" && (
-          <div className="w-full h-full bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] flex items-center justify-center">
+          <div
+            ref={gameWrapperRef}
+            className="w-full h-full bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] flex items-center justify-center relative cursor-pointer"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              if (!showWinModal) {
+                activateGame();
+              }
+            }}
+          >
             <div
               ref={gameContainerRef}
               className="block border-4 border-slate-900 shadow-[20px_20px_0px_0px_rgba(0,0,0,1)]"
@@ -1228,9 +1438,84 @@ export default function Editor() {
                 height: VIEWPORT_HEIGHT * BASE_TILE_SIZE,
               }}
             ></div>
+
+            {/* Overlay chỉ xuất hiện khi user đã blur (click ra ngoài) */}
+            {!isGameFocused && !showWinModal && (
+              <div
+                className="absolute inset-0 flex flex-col items-center justify-center bg-black/30 z-30 backdrop-blur-sm cursor-pointer"
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  activateGame();
+                }}
+              >
+                <div className="bg-white/95 border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.8)] px-8 py-6 rounded-lg pointer-events-auto">
+                  <p className="text-2xl font-black text-slate-900 mb-2 text-center">
+                    Click to Play
+                  </p>
+                  <p className="text-sm text-slate-600 text-center">
+                    Click vào khu vực game để bắt đầu
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {/* Win Modal */}
+      {showWinModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-in fade-in duration-300"
+          onPointerDown={(e) => {
+            if (e.target === e.currentTarget) handleReplay();
+          }}
+        >
+          <div className="bg-white border-4 border-slate-900 shadow-[20px_20px_0px_0px_rgba(0,0,0,1)] p-8 max-w-md w-full mx-4 animate-in zoom-in-95 duration-300">
+            <div className="flex flex-col items-center text-center">
+              {/* Trophy Icon */}
+              <div className="mb-4 p-4 bg-yellow-100 rounded-full">
+                <Trophy size={64} className="text-yellow-500" strokeWidth={2} />
+              </div>
+
+              {/* Title */}
+              <h2 className="text-4xl font-black text-slate-900 mb-2">
+                YOU WIN!
+              </h2>
+
+              {/* Score */}
+              <div className="mb-6">
+                <p className="text-lg font-bold text-slate-600 mb-1">Điểm số</p>
+                <p className="text-3xl font-black text-orange-500">
+                  {winScore.collected} / {winScore.total}
+                </p>
+                <p className="text-sm text-slate-500 mt-1">
+                  Kho báu đã thu thập
+                </p>
+              </div>
+
+              {/* Replay Button */}
+              <button
+                onClick={handleReplay}
+                className="w-full px-6 py-3 bg-green-500 hover:bg-green-400 text-white font-bold text-lg border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all flex items-center justify-center gap-2"
+              >
+                <RotateCcw size={20} strokeWidth={3} />
+                Chơi lại
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+
+  function handleReplay() {
+    setShowWinModal(false);
+    if (kaboomInstanceRef.current) {
+      kaboomInstanceRef.current.go("main");
+    }
+    // sau replay vẫn auto-play? tùy bạn. mình để về overlay để user chủ động:
+    setIsGameFocused(false);
+    isGameFocusedRef.current = false;
+    hasAutoActivatedRef.current = false; // nếu muốn replay xong auto-play luôn thì bỏ dòng này và gọi activateGame()
+  }
 }

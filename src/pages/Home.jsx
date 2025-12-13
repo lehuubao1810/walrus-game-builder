@@ -80,7 +80,7 @@ export default function Home() {
               className="relative group bg-white border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] overflow-hidden"
             >
               <div className="p-4 space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-orange-500">
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-orange-500 truncate">
                   Map #{game.id}
                 </p>
                 <h3 className="text-xl font-black text-slate-900">
@@ -103,10 +103,10 @@ export default function Home() {
                   </div>
                 )}
 
-                <div className="text-sm text-slate-600 flex gap-3">
+                {/* <div className="text-sm text-slate-600 flex gap-3">
                   <span>Likes: {game.likes || 0}</span>
                   <span>ID: {game.id?.slice(0, 8)}...</span>
-                </div>
+                </div> */}
               </div>
 
               <div className="absolute inset-0 bg-slate-900/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">

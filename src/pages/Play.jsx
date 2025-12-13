@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import kaboom from "kaboom";
-import { Play as PlayIcon, ArrowLeft, Edit3 } from "lucide-react";
+import { ArrowLeft, Edit3, Trophy, RotateCcw } from "lucide-react";
 import {
   fetchDungeonById,
   readDungeonMap,
@@ -14,39 +14,112 @@ export default function Play() {
   const gameContainerRef = useRef(null);
   const [gameData, setGameData] = useState(null);
   const [scale, setScale] = useState(1);
-  const [loading, setLoading] = useState(false);
+  const [loadingMap, setLoadingMap] = useState(false);
+  const [mapError, setMapError] = useState(null);
+  const [showWinModal, setShowWinModal] = useState(false);
+  const [winScore, setWinScore] = useState({ collected: 0, total: 0 });
+
+  // mặc định false, nhưng sẽ auto-activate 1 lần sau khi load xong
+  const [isGameFocused, setIsGameFocused] = useState(false);
+  const isGameFocusedRef = useRef(false);
+
+  const kaboomInstanceRef = useRef(null);
+  const gameWrapperRef = useRef(null);
+
+  // đảm bảo auto-activate chỉ chạy 1 lần cho mỗi lần vào page
+  const hasAutoActivatedRef = useRef(false);
+
+  const focusGameCanvas = useCallback(() => {
+    const root = gameContainerRef.current;
+    if (!root) return;
+
+    const canvas = root.querySelector("canvas");
+    if (!canvas) return;
+
+    if (!canvas.hasAttribute("tabindex")) canvas.setAttribute("tabindex", "0");
+
+    try {
+      canvas.focus({ preventScroll: true });
+    } catch {
+      canvas.focus();
+    }
+  }, []);
+
+  const activateGame = useCallback(() => {
+    setIsGameFocused(true);
+    isGameFocusedRef.current = true;
+
+    // overlay unmount xong mới focus
+    requestAnimationFrame(() => {
+      focusGameCanvas();
+    });
+  }, [focusGameCanvas]);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
-      setLoading(true);
       try {
         let game = null;
         if (PACKAGE_ID) {
           const onchain = await fetchDungeonById(id);
           if (onchain) {
-            // Sử dụng patchMapId để đọc map (nếu có), fallback về blobId
-            const idToUse = onchain.patchMapId || onchain.blobId;
-            if (!idToUse) throw new Error("Không có patchMapId hoặc blobId");
-            const mapJson = await readDungeonMap(idToUse);
-            if (!validateMapJsonSchema(mapJson)) throw new Error("Map không hợp lệ");
-            onchain.settings = mapJson;
             game = onchain;
+            if (active) setGameData(game);
+
+            setLoadingMap(true);
+            setMapError(null);
+            try {
+              const idToUse = onchain.patchMapId || onchain.blobId;
+              if (!idToUse) throw new Error("Không có patchMapId hoặc blobId");
+              const mapJson = await readDungeonMap(idToUse);
+              if (!validateMapJsonSchema(mapJson)) throw new Error("Map không hợp lệ");
+
+              if (active) {
+                setGameData({ ...game, settings: mapJson });
+              }
+            } catch (mapErr) {
+              console.error("Error loading map:", mapErr);
+              if (active) setMapError(mapErr.message);
+            } finally {
+              if (active) setLoadingMap(false);
+            }
+          } else {
+            if (active) setGameData(null);
           }
+        } else {
+          if (active) setGameData(null);
         }
-        if (active) setGameData(game);
       } catch (err) {
         console.error(err);
-        if (active) setGameData(null);
-      } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setGameData(null);
+          setMapError(err.message);
+          setLoadingMap(false);
+        }
       }
     };
+
+    // reset auto-activate khi đổi id
+    hasAutoActivatedRef.current = false;
+    setIsGameFocused(false);
+    isGameFocusedRef.current = false;
+
     load();
     return () => {
       active = false;
     };
   }, [id]);
+
+  // AUTO PLAY: khi map sẵn sàng lần đầu -> tự focus để chơi liền
+  useEffect(() => {
+    if (hasAutoActivatedRef.current) return;
+    if (showWinModal) return;
+    if (loadingMap || mapError) return;
+    if (!gameData?.settings) return;
+
+    hasAutoActivatedRef.current = true;
+    activateGame();
+  }, [loadingMap, mapError, gameData, showWinModal, activateGame]);
 
   useEffect(() => {
     if (
@@ -62,7 +135,6 @@ export default function Play() {
     const width = settings.config.width * tileSize;
     const height = settings.config.height * tileSize;
 
-    // Tính scale để khung game không vượt quá 90% chiều rộng và 80% chiều cao
     const scaleFactor = Math.min(
       (window.innerWidth * 0.95) / width,
       (window.innerHeight * 0.85) / height,
@@ -87,6 +159,7 @@ export default function Play() {
         background: [255, 247, 237],
       });
 
+      kaboomInstanceRef.current = k;
       k.setGravity(1600);
 
       function patrol(speed = 60, dir = 1) {
@@ -95,9 +168,7 @@ export default function Play() {
           require: ["pos", "area"],
           add() {
             this.on("collide", (obj, col) => {
-              if (col.isLeft() || col.isRight()) {
-                dir = -dir;
-              }
+              if (col.isLeft() || col.isRight()) dir = -dir;
             });
           },
           update() {
@@ -108,19 +179,13 @@ export default function Play() {
 
       const validSprites = new Set();
       const loadPromises = [];
-
       const tilesDef = {};
       const assets = settings.assets || {};
 
       Object.keys(assets).forEach((key) => {
         const asset = assets[key];
         tilesDef[key] = () => {
-          const comps = [
-            k.area(),
-            k.body({ isStatic: true }),
-            `wall_${key}`,
-            "wall",
-          ];
+          const comps = [k.area(), k.body({ isStatic: true }), `wall_${key}`, "wall"];
 
           if (asset.type === "image" && asset.value) {
             const p = k
@@ -131,12 +196,9 @@ export default function Play() {
           }
 
           if (asset.type === "image" && asset.value && validSprites.has(key)) {
-            comps.push(
-              k.sprite(`wall_${key}`, { width: tileSize, height: tileSize })
-            );
+            comps.push(k.sprite(`wall_${key}`, { width: tileSize, height: tileSize }));
           } else {
-            const colorHex =
-              asset.type === "color" ? asset.value : "#94a3b8" /* fallback */;
+            const colorHex = asset.type === "color" ? asset.value : "#94a3b8";
             comps.push(k.rect(tileSize, tileSize));
             comps.push(k.color(k.Color.fromHex(colorHex)));
             comps.push(k.outline(2, k.BLACK));
@@ -202,6 +264,10 @@ export default function Play() {
           const level = k.addLevel(levelMap, levelConfig);
           const players = level.get("player");
 
+          const totalCoins = settings.layout.join("").split("").filter((c) => c === "$").length;
+          let collectedCoins = 0;
+          let isWon = false;
+
           if (players.length > 0) {
             const player = players[0];
             const SPEED = 200;
@@ -210,6 +276,7 @@ export default function Play() {
             k.camPos(player.pos);
 
             player.onUpdate(() => {
+              if (isWon) return;
               k.camPos(player.pos);
               if (player.pos.y > settings.config.height * tileSize + 200) {
                 k.shake(20);
@@ -217,18 +284,40 @@ export default function Play() {
               }
             });
 
-            k.onKeyDown("left", () => player.move(-SPEED, 0));
-            k.onKeyDown("right", () => player.move(SPEED, 0));
+            k.onKeyDown("left", () => {
+              if (!isWon && isGameFocusedRef.current) player.move(-SPEED, 0);
+            });
+            k.onKeyDown("right", () => {
+              if (!isWon && isGameFocusedRef.current) player.move(SPEED, 0);
+            });
+
             const jump = () => {
-              if (player.isGrounded()) player.jump(JUMP_FORCE);
+              if (!isWon && isGameFocusedRef.current && player.isGrounded())
+                player.jump(JUMP_FORCE);
             };
+
             k.onKeyPress("up", jump);
             k.onKeyPress("space", jump);
 
             player.onCollide("coin", (c) => {
+              if (isWon) return;
               k.destroy(c);
               k.shake(2);
+              collectedCoins++;
+
+              if (collectedCoins >= totalCoins) {
+                isWon = true;
+                k.shake(10);
+                k.addKaboom(player.pos);
+
+                setWinScore({ collected: collectedCoins, total: totalCoins });
+                setShowWinModal(true);
+
+                setIsGameFocused(false);
+                isGameFocusedRef.current = false;
+              }
             });
+
             player.onCollide("danger", () => {
               k.shake(20);
               k.addKaboom(player.pos);
@@ -239,6 +328,11 @@ export default function Play() {
         });
 
         k.go("main");
+
+        // nếu đang focused thì focus canvas ngay sau khi scene ready
+        if (isGameFocusedRef.current) {
+          requestAnimationFrame(() => focusGameCanvas());
+        }
       });
     } catch (err) {
       console.error(err);
@@ -248,16 +342,28 @@ export default function Play() {
       isCleanedUp = true;
       if (k && k.quit) k.quit();
     };
-  }, [gameData]);
+  }, [gameData, focusGameCanvas]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-orange-50 text-slate-900">
-        <p className="text-lg font-bold mb-2">Đang tải map...</p>
-        <p className="text-sm text-slate-600">Vui lòng chờ trong giây lát</p>
-      </div>
-    );
-  }
+  // Click outside: blur game
+  useEffect(() => {
+    const handlePointerDownOutside = (event) => {
+      if (gameWrapperRef.current && !gameWrapperRef.current.contains(event.target)) {
+        setIsGameFocused(false);
+        isGameFocusedRef.current = false;
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDownOutside, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDownOutside, true);
+    };
+  }, []);
+
+  // Sync ref with state (và focus lại canvas nếu state chuyển true)
+  useEffect(() => {
+    isGameFocusedRef.current = isGameFocused;
+    if (isGameFocused) requestAnimationFrame(() => focusGameCanvas());
+  }, [isGameFocused, focusGameCanvas]);
 
   if (!gameData) {
     return (
@@ -273,13 +379,17 @@ export default function Play() {
     );
   }
 
-  const tileSize = gameData.settings.config.tileSize || 32;
-  const width = gameData.settings.config.width * tileSize;
-  const height = gameData.settings.config.height * tileSize;
+  const tileSize = gameData.settings?.config?.tileSize || 32;
+  const width = gameData.settings?.config?.width
+    ? gameData.settings.config.width * tileSize
+    : 640;
+  const height = gameData.settings?.config?.height
+    ? gameData.settings.config.height * tileSize
+    : 384;
 
   return (
     <div className="min-h-screen bg-linear-to-br from-orange-50 to-orange-100 relative flex flex-col items-center justify-center p-6 text-slate-900">
-      <header className="absolute top-6 left-6 right-6 flex items-center justify-between">
+      <header className="absolute top-6 left-6 right-6 flex items-center justify-between z-10">
         <Link
           to="/"
           className="px-3 py-2 border-2 border-slate-900 bg-white shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] font-bold flex items-center gap-2"
@@ -289,7 +399,7 @@ export default function Play() {
         </Link>
 
         <div className="text-lg font-black text-slate-900 text-center flex-1">
-          {gameData.settings.meta.title}
+          {gameData.settings?.meta?.title || gameData.name || "Loading..."}
         </div>
 
         <Link
@@ -303,23 +413,72 @@ export default function Play() {
 
       <div className="w-full flex items-center justify-center mt-16">
         <div
-          className="border-4 border-slate-900 shadow-[16px_16px_0px_0px_rgba(0,0,0,0.8)] bg-white flex items-center justify-center"
+          ref={gameWrapperRef}
+          className="border-4 border-slate-900 shadow-[16px_16px_0px_0px_rgba(0,0,0,0.8)] bg-white flex items-center justify-center relative cursor-pointer"
           style={{
             maxWidth: "92vw",
             maxHeight: "82vh",
             overflow: "hidden",
+            minWidth: width,
+            minHeight: height,
+          }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            if (!loadingMap && !mapError && gameData.settings && !showWinModal) {
+              activateGame();
+            }
           }}
         >
-          <div
-            ref={gameContainerRef}
-            className="block"
-            style={{
-              width,
-              height,
-              transform: `scale(${scale})`,
-              transformOrigin: "center",
-            }}
-          ></div>
+          {loadingMap && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 z-20">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-orange-500 mb-4"></div>
+              <p className="text-sm font-bold text-slate-700">Đang tải map...</p>
+            </div>
+          )}
+
+          {mapError && !loadingMap && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 z-20">
+              <p className="text-sm font-bold text-red-600 mb-2">Lỗi tải map</p>
+              <p className="text-xs text-slate-600">{mapError}</p>
+            </div>
+          )}
+
+          {!loadingMap && !mapError && gameData.settings && (
+            <div
+              ref={gameContainerRef}
+              className="block"
+              style={{
+                width,
+                height,
+                transform: `scale(${scale})`,
+                transformOrigin: "center",
+              }}
+            />
+          )}
+
+          {/* Overlay chỉ xuất hiện khi user đã blur (click ra ngoài) */}
+          {!loadingMap &&
+            !mapError &&
+            gameData.settings &&
+            !isGameFocused &&
+            !showWinModal && (
+              <div
+                className="absolute inset-0 flex flex-col items-center justify-center bg-black/30 z-30 backdrop-blur-sm cursor-pointer"
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  activateGame();
+                }}
+              >
+                <div className="bg-white/95 border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.8)] px-8 py-6 rounded-lg pointer-events-auto">
+                  <p className="text-2xl font-black text-slate-900 mb-2 text-center">
+                    Click to Play
+                  </p>
+                  <p className="text-sm text-slate-600 text-center">
+                    Click vào khu vực game để bắt đầu
+                  </p>
+                </div>
+              </div>
+            )}
         </div>
       </div>
 
@@ -335,7 +494,52 @@ export default function Play() {
           <span>1/2/3 : Tường</span>
         </div>
       </div>
+
+      {showWinModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-in fade-in duration-300"
+          onPointerDown={(e) => {
+            if (e.target === e.currentTarget) handleReplay();
+          }}
+        >
+          <div className="bg-white border-4 border-slate-900 shadow-[20px_20px_0px_0px_rgba(0,0,0,1)] p-8 max-w-md w-full mx-4 animate-in zoom-in-95 duration-300">
+            <div className="flex flex-col items-center text-center">
+              <div className="mb-4 p-4 bg-yellow-100 rounded-full">
+                <Trophy size={64} className="text-yellow-500" strokeWidth={2} />
+              </div>
+
+              <h2 className="text-4xl font-black text-slate-900 mb-2">YOU WIN!</h2>
+
+              <div className="mb-6">
+                <p className="text-lg font-bold text-slate-600 mb-1">Điểm số</p>
+                <p className="text-3xl font-black text-orange-500">
+                  {winScore.collected} / {winScore.total}
+                </p>
+                <p className="text-sm text-slate-500 mt-1">Kho báu đã thu thập</p>
+              </div>
+
+              <button
+                onClick={handleReplay}
+                className="w-full px-6 py-3 bg-green-500 hover:bg-green-400 text-white font-bold text-lg border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all flex items-center justify-center gap-2"
+              >
+                <RotateCcw size={20} strokeWidth={3} />
+                Chơi lại
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-}
 
+  function handleReplay() {
+    setShowWinModal(false);
+    if (kaboomInstanceRef.current) {
+      kaboomInstanceRef.current.go("main");
+    }
+    // sau replay vẫn auto-play? tùy bạn. mình để về overlay để user chủ động:
+    setIsGameFocused(false);
+    isGameFocusedRef.current = false;
+    hasAutoActivatedRef.current = false; // nếu muốn replay xong auto-play luôn thì bỏ dòng này và gọi activateGame()
+  }
+}
