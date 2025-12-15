@@ -1,0 +1,52 @@
+# Lộ trình dự án (tiếng Việt)
+
+Tài liệu này tóm tắt các giai đoạn phát triển khả thi cho game builder onchain, ưu tiên bước nhỏ, dễ triển khai, và để dành tính năng phức tạp cho tương lai.
+
+## Phase 0 — Ổn định MVP hiện tại
+- Giữ luồng hiện tại: upload map/thumbnail lên Walrus, mint NFT dungeon trên Sui testnet, gallery/play đọc metadata onchain và blob offchain.
+- Chuẩn hóa **version/hồ sơ map**: lưu và hiển thị hash + version trong UI để đóng băng trải nghiệm chơi theo từng mint.
+- Thêm event/contract tối thiểu cho `run_submitted` để phục vụ kiểm chứng sau này.
+
+## Phase 1 — Vault thưởng cơ bản (claim theo từng run)
+- Move module **Reward Vault**: khóa pool token hữu hạn cho từng season/map version.
+- Gameplay vẫn offchain; client gửi 1 giao dịch `claim_base_reward` sau run với hash log (map hash, seed, score, treasures, time_ms).
+- Giới hạn payout mỗi run và giới hạn lượt/ngày; dừng chi trả khi vault hết.
+- Backend/indexer nhẹ: cấp `run_id` + seed, lưu log, trả KPI cơ bản.
+
+## Phase 2 — Pool thưởng leaderboard
+- Mở rộng vault với **Leaderboard Pool** cho top speedrun hoặc top nhặt kho báu.
+- Emit `run_submitted` với trường chuẩn; indexer tính leaderboard offchain.
+- Cuối mùa trả thưởng top N bằng giao dịch Merkle proof.
+- Chống replay: `run_id` gắn với ví + map version, dùng một lần.
+
+## Phase 3 — Tích hợp nhà tài trợ (Sponsor)
+- Tạo **Sponsor Vault**: sponsor khóa token cho map/version được chọn.
+- Quy trình chọn: committee/DAO duyệt dựa trên KPI (lượt chơi, clear rate, doanh thu, báo lỗi).
+- Chia phí mỗi run: tỷ lệ cho creator / DAO / sponsor vault (hoàn trả phần chưa dùng sau mùa).
+- Gallery hiển thị badge “Sponsored”; form “Apply for sponsorship” vào hàng duyệt.
+
+## Phase 4 — Chest ngẫu nhiên (RNG) & Pass
+- Hàm `open_chest` dùng randomness Sui (VRF hoặc gas-object RNG), payout không vượt sponsor vault.
+- Rate-limit số chest/run/ngày; ghi event seed + outcome để audit.
+- **Map Pass / Sponsor Pass** NFT: multiplier/badge theo season; metadata động cho chỉ số cosmetic (số lần clear, best score), gameplay vẫn đóng băng theo version.
+
+## Phase 5 — Monetization qua Kiosk
+- Dùng **Kiosk** để bán/thuê: Map NFT (quyền doanh thu), Pass NFT, và Sponsor Slot.
+- Luồng thuê: khóa Pass trong thời hạn, tự trả sau khi hết hạn.
+- Dòng doanh thu qua Kiosk tuân theo công thức chia phí ở Phase 3.
+
+## Phase 6 — Chống gian lận & cải thiện UX
+- Gộp end-run + claim trong một giao dịch; giữ chế độ chơi thử miễn phí (không thưởng).
+- Backend kiểm tra sanity: mô phỏng nhẹ từ log + seed; giới hạn số hành động/thời gian.
+- Công khai API/endpoint: sự kiện run, số dư vault, snapshot leaderboard.
+
+## Hướng triển khai chi tiết (ưu tiên)
+1. **Triển khai nhanh (Phase 0–1)**: thêm hash/version UI, event `run_submitted`, module Reward Vault, backend cấp `run_id` + seed và API KPI cơ bản. 
+2. **Cạnh tranh & sponsor (Phase 2–3)**: bổ sung Leaderboard Pool + Merkle payout; form apply & dashboard duyệt; fee split và refund sponsor vault.
+3. **Tăng hấp dẫn (Phase 4–5)**: chest RNG an toàn, Pass NFT động (chỉ cosmetic), bán/thuê Pass/Map/Sponsor Slot qua Kiosk.
+4. **Niềm tin & chất lượng (Phase 6)**: batch giao dịch claim, sanity replay, rate limit, công khai số liệu để audit.
+
+## Lưu ý kỹ thuật
+- Gameplay phải xác định được từ **map hash + seed** để có thể kiểm chứng/offline replay.
+- Không claim theo từng nhặt; luôn claim một lần sau run, payout bị chặn bởi vault hữu hạn và giới hạn tốc độ.
+- Ưu tiên thử nghiệm trên testnet, chỉ mở season có sponsor trên mainnet sau khi telemetry ổn.
