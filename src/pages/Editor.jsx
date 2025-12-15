@@ -27,6 +27,7 @@ import {
 import { WalletBar } from "../components/WalletBar";
 import { useWalrusUpload } from "../hooks/useWalrusUpload";
 import { useDungeonMint } from "../hooks/useDungeonMint";
+import { useDungeonRegistry } from "../hooks/useDungeonRegistry";
 import {
   fetchDungeonById,
   readDungeonMap,
@@ -152,6 +153,45 @@ export default function Editor() {
   const editorGridRef = useRef(null);
   const { uploadCombinedDungeon, isUploading } = useWalrusUpload();
   const { mintDungeon, isMinting } = useDungeonMint();
+  const { registerMap, getGameInfo } = useDungeonRegistry();
+
+  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [publishFee, setPublishFee] = useState("0");
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [challengeInfo, setChallengeInfo] = useState(null);
+
+  // Load challenge info if ID exists
+  useEffect(() => {
+    if (id) {
+      getGameInfo(id).then((info) => {
+        if (info) setChallengeInfo(info);
+      });
+    }
+  }, [id, getGameInfo]);
+
+  const handlePublish = async () => {
+    /* ... */
+    if (!id) {
+      showToast("Please Save & Mint the map first!");
+      return;
+    }
+    try {
+      setIsRegistering(true);
+      setMintStatus("Registering map...");
+      // Convert SUI to MIST (1 SUI = 10^9 MIST)
+      const feeInMist = Math.floor(parseFloat(publishFee) * 1_000_000_000);
+      await registerMap(id, feeInMist);
+      setMintStatus("Registered successfully!");
+      showToast("Map published to Arcade!", "success");
+      setShowPublishModal(false);
+    } catch (err) {
+      console.error(err);
+      setMintStatus("Registration failed");
+      showToast(err.message);
+    } finally {
+      setIsRegistering(false);
+    }
+  };
 
   // Helper để kiểm tra element có thuộc "safe zone" (UI) không
   const shouldIgnoreBlur = useCallback((target) => {
@@ -548,7 +588,10 @@ export default function Editor() {
       setMintStatus("Uploading to Walrus (Batch)...");
 
       // Combined upload
-      const { mapCtx, imageCtx } = await uploadCombinedDungeon(mapJson, thumbnail);
+      const { mapCtx, imageCtx } = await uploadCombinedDungeon(
+        mapJson,
+        thumbnail
+      );
       console.log("Upload Result:", { mapCtx, imageCtx });
 
       const blobId = mapCtx.blobId;
@@ -871,13 +914,21 @@ export default function Editor() {
     if (isGameFocused) requestAnimationFrame(() => focusGameCanvas());
   }, [isGameFocused, focusGameCanvas]);
 
-  const RetroButton = ({ onClick, onPointerDown, active, children, className, disabled }) => (
+  const RetroButton = ({
+    onClick,
+    onPointerDown,
+    active,
+    children,
+    className,
+    disabled,
+  }) => (
     <button
       onClick={onClick}
       onPointerDown={onPointerDown}
       disabled={disabled}
-      className={`relative px-4 py-2 font-mono font-bold text-sm uppercase transition-all border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:translate-x-[2px] disabled:translate-y-[2px] ${active ? "text-white" : "text-slate-900 hover:opacity-80"
-        } ${className}`}
+      className={`relative px-4 py-2 font-mono font-bold text-sm uppercase transition-all border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none disabled:translate-x-[2px] disabled:translate-y-[2px] ${
+        active ? "text-white" : "text-slate-900 hover:opacity-80"
+      } ${className}`}
     >
       {children}
     </button>
@@ -898,8 +949,12 @@ export default function Editor() {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-orange-50 text-slate-900 font-mono">
         <div className="bg-white p-8 border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] max-w-md text-center">
-          <h2 className="text-2xl font-black mb-4 text-orange-600 uppercase">Connect Wallet Required</h2>
-          <p className="mb-6 font-medium">Please connect your Sui wallet to access the Editor.</p>
+          <h2 className="text-2xl font-black mb-4 text-orange-600 uppercase">
+            Connect Wallet Required
+          </h2>
+          <p className="mb-6 font-medium">
+            Please connect your Sui wallet to access the Editor.
+          </p>
           <div className="flex justify-center wallet-connect-btn">
             <ConnectButton />
           </div>
@@ -912,8 +967,12 @@ export default function Editor() {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-orange-50 text-slate-900 font-mono">
         <div className="bg-white p-8 border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] max-w-md text-center">
-          <h2 className="text-2xl font-black mb-4 text-red-500">UNAUTHORIZED</h2>
-          <p className="mb-6 font-medium">You are not the owner of this NFT Dungeon content.</p>
+          <h2 className="text-2xl font-black mb-4 text-red-500">
+            UNAUTHORIZED
+          </h2>
+          <p className="mb-6 font-medium">
+            You are not the owner of this NFT Dungeon content.
+          </p>
           <RetroButton
             onClick={() => navigate("/")}
             className="w-full bg-slate-900 text-white hover:bg-slate-700"
@@ -940,7 +999,11 @@ export default function Editor() {
 
       {/* SIDEBAR */}
 
-      <div className={`w-80 bg-white border-r-4 border-slate-900 flex flex-col shadow-xl z-10 overflow-y-auto mt-14 transition-all duration-300 relative ${mode === "PLAY" ? "opacity-50 grayscale" : ""}`}>
+      <div
+        className={`w-80 bg-white border-r-4 border-slate-900 flex flex-col shadow-xl z-10 overflow-y-auto mt-14 transition-all duration-300 relative ${
+          mode === "PLAY" ? "opacity-50 grayscale" : ""
+        }`}
+      >
         {mode === "PLAY" && (
           <div className="absolute inset-0 z-50 bg-white/20 cursor-not-allowed" />
         )}
@@ -1038,15 +1101,17 @@ export default function Editor() {
               return (
                 <div
                   key={tool.id}
-                  className={`transition-all ${isSelected ? "translate-x-2" : ""
-                    }`}
+                  className={`transition-all ${
+                    isSelected ? "translate-x-2" : ""
+                  }`}
                 >
                   <button
                     onClick={() => setSelectedToolId(tool.id)}
-                    className={`w-full flex items-center gap-4 p-3 text-left border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,0.2)] hover:shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] hover:translate-x-[2px] hover:translate-y-[2px] transition-all ${isSelected
-                      ? "bg-orange-500 text-white shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] translate-y-[2px]"
-                      : "bg-white text-slate-900"
-                      }`}
+                    className={`w-full flex items-center gap-4 p-3 text-left border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,0.2)] hover:shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] hover:translate-x-[2px] hover:translate-y-[2px] transition-all ${
+                      isSelected
+                        ? "bg-orange-500 text-white shadow-[2px_2px_0px_0px_rgba(15,23,42,1)] translate-y-[2px]"
+                        : "bg-white text-slate-900"
+                    }`}
                   >
                     <div
                       className="w-10 h-10 border-2 border-slate-900 flex items-center justify-center shrink-0 bg-white"
@@ -1059,8 +1124,9 @@ export default function Editor() {
                       {!isWall && tool.icon && (
                         <tool.icon
                           size={20}
-                          className={`relative z-10 ${isSelected ? "text-white" : "text-slate-900"
-                            }`}
+                          className={`relative z-10 ${
+                            isSelected ? "text-white" : "text-slate-900"
+                          }`}
                           strokeWidth={2.5}
                         />
                       )}
@@ -1098,7 +1164,10 @@ export default function Editor() {
       <div className="flex-1 relative flex flex-col overflow-hidden mt-14">
         {/* TOP BAR (Luôn hiển thị) */}
 
-        <div className="absolute top-6 left-6 right-6 z-50 flex justify-between items-center" data-ui="1">
+        <div
+          className="absolute top-6 left-6 right-6 z-50 flex justify-between items-center"
+          data-ui="1"
+        >
           <RetroButton
             onClick={() => navigate("/")}
             className="bg-slate-700 hover:bg-slate-600 text-white flex items-center gap-2"
@@ -1115,23 +1184,55 @@ export default function Editor() {
                   }}
                   className="bg-green-500 hover:bg-green-400 text-white flex items-center gap-2"
                 >
-                  <Play size={18} fill="currentColor" strokeWidth={3} /> PLAY TEST
+                  <Play size={18} fill="currentColor" strokeWidth={3} /> PLAY
+                  TEST
                 </RetroButton>
 
                 <div className="flex gap-2">
-                  {/* <RetroButton
-                    onClick={handleExport}
-                    className="bg-purple-500 hover:bg-purple-400 text-white flex items-center gap-2"
-                  >
-                    <Download size={18} strokeWidth={3} /> SAVE
-                  </RetroButton> */}
-                  <RetroButton
-                    onClick={handleSaveAndMint}
-                    disabled={isUploading || isMinting}
-                    className="bg-pink-500 hover:bg-pink-400 text-white flex items-center gap-2"
-                  >
-                    {isUploading || isMinting ? "PROCESSING..." : "SAVE & MINT"}
-                  </RetroButton>
+                  <div className="flex items-center gap-2">
+                    <div className="flex bg-white rounded border-2 border-slate-300 p-1">
+                      <input
+                        className="outline-none text-sm font-bold text-slate-700 w-40"
+                        value={dungeonName}
+                        onChange={(e) => setDungeonName(e.target.value)}
+                        placeholder="Dungeon Name"
+                      />
+                    </div>
+
+                    {id && !unAuthorized && (
+                      <button
+                        onClick={() => setShowPublishModal(true)}
+                        className="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white font-bold uppercase border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)] active:translate-y-1 active:shadow-none flex items-center gap-2"
+                      >
+                        <Trophy size={18} /> Publish
+                      </button>
+                    )}
+
+                    {/* [NEW] Show simple Challenge Stats if published */}
+                    {challengeInfo && challengeInfo.fee > 0 && (
+                      <div
+                        className="flex flex-col bg-slate-100 rounded border-2 border-slate-300 px-2 py-0.5 text-[10px] font-mono leading-tight"
+                        title="Challenge Mode Info"
+                      >
+                        <div className="text-purple-600 font-bold">
+                          Fee: {challengeInfo.fee / 1_000_000_000} SUI
+                        </div>
+                        <div className="text-orange-600 font-bold">
+                          Pool: {challengeInfo.rewardPool / 1_000_000_000} SUI
+                        </div>
+                      </div>
+                    )}
+
+                    <RetroButton
+                      onClick={handleSaveAndMint}
+                      disabled={isUploading || isMinting}
+                      className="bg-pink-500 hover:bg-pink-400 text-white flex items-center gap-2"
+                    >
+                      {isUploading || isMinting
+                        ? "PROCESSING..."
+                        : "SAVE & MINT"}
+                    </RetroButton>
+                  </div>
                 </div>
               </>
             ) : (
@@ -1162,10 +1263,11 @@ export default function Editor() {
         {/* Toast Notification */}
         {toast && (
           <div
-            className={`fixed top-20 right-6 z-50 px-4 py-3 border-2 border-slate-900 shadow-[6px_6px_0px_0px_rgba(15,23,42,1)] font-bold text-sm transition-all animate-in slide-in-from-right ${toast.type === "success"
-              ? "bg-green-500 text-white"
-              : "bg-red-500 text-white"
-              }`}
+            className={`fixed top-20 right-6 z-50 px-4 py-3 border-2 border-slate-900 shadow-[6px_6px_0px_0px_rgba(15,23,42,1)] font-bold text-sm transition-all animate-in slide-in-from-right ${
+              toast.type === "success"
+                ? "bg-green-500 text-white"
+                : "bg-red-500 text-white"
+            }`}
           >
             {toast.message}
           </div>
@@ -1196,8 +1298,9 @@ export default function Editor() {
               <div className="flex items-center justify-center min-w-[2000px] min-h-[2000px] p-20">
                 <div
                   ref={editorGridRef}
-                  className={`bg-white p-2 border-4 border-slate-900 shadow-[20px_20px_0px_0px_rgba(15,23,42,0.2)] transition-transform duration-100 origin-center ${isZoomMode ? "" : "cursor-crosshair"
-                    }`}
+                  className={`bg-white p-2 border-4 border-slate-900 shadow-[20px_20px_0px_0px_rgba(15,23,42,0.2)] transition-transform duration-100 origin-center ${
+                    isZoomMode ? "" : "cursor-crosshair"
+                  }`}
                 >
                   <div
                     style={{
@@ -1289,10 +1392,11 @@ export default function Editor() {
               <div className="bg-white border-2 border-slate-900 p-1 flex gap-1 shadow-[4px_4px_0px_0px_rgba(15,23,42,1)]">
                 <button
                   onClick={() => setIsZoomMode(!isZoomMode)}
-                  className={`p-2 border-2 border-slate-900 font-bold text-xs flex items-center gap-2 transition-all ${isZoomMode
-                    ? "bg-red-500 text-white"
-                    : "bg-slate-200 text-slate-700 hover:bg-white"
-                    }`}
+                  className={`p-2 border-2 border-slate-900 font-bold text-xs flex items-center gap-2 transition-all ${
+                    isZoomMode
+                      ? "bg-red-500 text-white"
+                      : "bg-slate-200 text-slate-700 hover:bg-white"
+                  }`}
                 >
                   {isZoomMode ? (
                     <Hand size={16} strokeWidth={3} />
@@ -1372,6 +1476,56 @@ export default function Editor() {
           </div>
         )}
       </div>
+
+      {/* Publish Modal */}
+      {showPublishModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          data-ui="1"
+        >
+          <div className="bg-white p-6 border-4 border-slate-900 shadow-[8px_8px_0px_0px_rgba(15,23,42,1)] max-w-sm w-full">
+            <h3 className="text-2xl font-black text-slate-900 mb-4">
+              PUBLISH TO ARCADE
+            </h3>
+            <p className="text-slate-600 mb-4 text-sm">
+              Set an entry fee for "Challenge Mode". Players pay this fee to
+              play.
+              <br />
+              <b>70%</b> to Reward Pool, <b>20%</b> to You.
+            </p>
+
+            <div className="mb-4">
+              <label className="block text-xs font-bold uppercase text-slate-500 mb-1">
+                Entry Fee (SUI)
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                value={publishFee}
+                onChange={(e) => setPublishFee(e.target.value)}
+                className="w-full border-2 border-slate-300 px-3 py-2 font-mono focus:border-purple-500 outline-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowPublishModal(false)}
+                className="px-4 py-2 font-bold text-slate-500 hover:bg-slate-100"
+              >
+                CANCEL
+              </button>
+              <button
+                onClick={handlePublish}
+                disabled={isRegistering}
+                className="px-4 py-2 bg-purple-500 text-white font-bold border-2 border-slate-900 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-purple-600 disabled:opacity-50"
+              >
+                {isRegistering ? "PUBLISHING..." : "CONFIRM"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Win Modal */}
       {showWinModal && (
